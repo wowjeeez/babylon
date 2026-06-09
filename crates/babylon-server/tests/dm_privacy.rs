@@ -32,6 +32,7 @@ async fn dm_channel_not_joinable_by_stranger() -> anyhow::Result<()> {
         dev_no_auth: true,
         allow_funnel: false,
         owner_login: None,
+        allowed_hosts: vec![],
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;
@@ -97,6 +98,7 @@ async fn dm_messages_not_visible_in_carols_catch_up() -> anyhow::Result<()> {
         dev_no_auth: true,
         allow_funnel: false,
         owner_login: None,
+        allowed_hosts: vec![],
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;

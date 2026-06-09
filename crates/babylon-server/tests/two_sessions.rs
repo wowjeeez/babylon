@@ -77,6 +77,7 @@ async fn cross_agent_wait_wakes_over_shared_hub() -> anyhow::Result<()> {
         dev_no_auth: true,
         allow_funnel: false,
         owner_login: None,
+        allowed_hosts: vec![],
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;

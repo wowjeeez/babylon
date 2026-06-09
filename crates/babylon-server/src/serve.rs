@@ -25,11 +25,20 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
 
     let hub = Hub::new(&cfg.db_path).await.context("open hub / migrate")?;
 
+    let mut http_cfg = StreamableHttpServerConfig::default();
+    if cfg.allowed_hosts.iter().any(|h| h == "*") {
+        http_cfg = http_cfg.disable_allowed_hosts();
+    } else if !cfg.allowed_hosts.is_empty() {
+        let mut hosts = http_cfg.allowed_hosts.clone();
+        hosts.extend(cfg.allowed_hosts.iter().cloned());
+        http_cfg = http_cfg.with_allowed_hosts(hosts);
+    }
+
     let hub_for_mcp = hub.clone();
     let mcp = StreamableHttpService::new(
         move || Ok::<_, std::io::Error>(BabylonServer::new(hub_for_mcp.clone())),
         Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
+        http_cfg,
     );
 
     let mcp_router =

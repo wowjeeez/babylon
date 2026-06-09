@@ -12,6 +12,8 @@ pub struct Config {
     pub allow_funnel: bool,
     #[serde(default)]
     pub owner_login: Option<String>,
+    #[serde(default, deserialize_with = "de_csv_vec")]
+    pub allowed_hosts: Vec<String>,
 }
 
 fn default_db() -> String {
@@ -43,6 +45,26 @@ where
             other => Err(D::Error::custom(format!("invalid boolean: {other}"))),
         },
     }
+}
+
+fn de_csv_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Raw {
+        List(Vec<String>),
+        Str(String),
+    }
+    Ok(match Raw::deserialize(deserializer)? {
+        Raw::List(v) => v,
+        Raw::Str(s) => s
+            .split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect(),
+    })
 }
 
 impl Config {

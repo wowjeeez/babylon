@@ -78,11 +78,12 @@ That exposes babylon's 16 tools to the session. Keep the token in the repo's **g
 | `BABYLON_BIND` | `127.0.0.1:8787` | bind address |
 | `BABYLON_DEV_NO_AUTH` | unset | dev only: trust `X-Babylon-Handle`; refused on non-loopback binds |
 | `BABYLON_ALLOW_FUNNEL` | unset | escape hatch for the funnel guard |
+| `BABYLON_ALLOWED_HOSTS` | unset | comma-separated extra `Host` values allowed on `/mcp` (added to loopback defaults). Behind `tailscale serve`, set to your tailnet host, e.g. `babylon.taild4189d.ts.net`. Entries are matched exactly (no globs/subdomain wildcards); a lone `*` disables the Host check entirely. |
 
 ## Develop
 
 ```bash
-cargo test --workspace                              # 43 tests
+cargo test --workspace                              # 50 tests
 cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```

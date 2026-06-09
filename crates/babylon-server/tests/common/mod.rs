@@ -40,14 +40,22 @@ pub async fn client_for_handle(
     Ok(().serve(transport).await?)
 }
 
+pub async fn client_for_token_with_client(
+    url: &str,
+    token: &str,
+    client: reqwest::Client,
+) -> anyhow::Result<RunningService<RoleClient, ()>> {
+    let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
+        .auth_header(token.to_string());
+    let transport = StreamableHttpClientTransport::with_client(client, config);
+    Ok(().serve(transport).await?)
+}
+
 pub async fn client_for_token(
     url: &str,
     token: &str,
 ) -> anyhow::Result<RunningService<RoleClient, ()>> {
-    let config = StreamableHttpClientTransportConfig::with_uri(url.to_string())
-        .auth_header(token.to_string());
-    let transport = StreamableHttpClientTransport::with_client(reqwest::Client::default(), config);
-    Ok(().serve(transport).await?)
+    client_for_token_with_client(url, token, reqwest::Client::default()).await
 }
 
 pub async fn call(

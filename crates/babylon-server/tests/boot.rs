@@ -31,6 +31,7 @@ async fn server_boots_and_healthz_ok() -> anyhow::Result<()> {
         dev_no_auth: true,
         allow_funnel: false,
         owner_login: None,
+        allowed_hosts: vec![],
     };
 
     let srv = tokio::spawn(async move {

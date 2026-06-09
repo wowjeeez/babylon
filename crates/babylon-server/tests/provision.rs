@@ -21,6 +21,7 @@ async fn start_server(owner_login: Option<&str>) -> anyhow::Result<(String, temp
         dev_no_auth: true,
         allow_funnel: false,
         owner_login: owner_login.map(ToString::to_string),
+        allowed_hosts: vec![],
     };
 
     tokio::spawn(async move {
