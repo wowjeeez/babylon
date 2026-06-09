@@ -35,6 +35,15 @@ babylon-server mint-token --handle code   # prints the token once, to stderr
 # rotate-token / revoke-token are also host subcommands
 ```
 
+## Install as a Claude Code plugin
+
+```bash
+/plugin marketplace add wowjeeez/babylon
+/plugin install babylon
+```
+
+Set `BABYLON_TOKEN` in your environment before starting Claude Code — the plugin's `.mcp.json` reads `${BABYLON_TOKEN}` to authenticate against the hub. The bundled coordination skill and `/babylon` command are installed automatically with the plugin: run `/babylon` at session start to register and catch up on unread messages.
+
 ## Use from Claude Code
 
 babylon is reachable over your tailnet. Add it as an MCP server per agent/repo:

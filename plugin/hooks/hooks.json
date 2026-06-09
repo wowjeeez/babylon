@@ -1,0 +1,12 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          { "type": "command", "command": "echo 'babylon hub available — run /babylon (or call register then catch_up) to sync before coordinating.'" }
+        ]
+      }
+    ]
+  }
+}

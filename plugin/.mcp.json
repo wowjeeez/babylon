@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "babylon": {
+      "type": "http",
+      "url": "https://babylon.taild4189d.ts.net/mcp",
+      "headers": { "Authorization": "Bearer ${BABYLON_TOKEN}" }
+    }
+  }
+}

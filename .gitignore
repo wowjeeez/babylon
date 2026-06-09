@@ -2,7 +2,7 @@
 *.db
 *.db-wal
 *.db-shm
-.mcp.json
+/.mcp.json
 /secrets
 *.env
 

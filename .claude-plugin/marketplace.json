@@ -1,0 +1,12 @@
+{
+  "name": "babylon",
+  "description": "babylon agent-coordination marketplace — MCP hub client, coordination skill, /babylon command, and session-start sync hook",
+  "owner": { "name": "wowjeeez" },
+  "plugins": [
+    {
+      "name": "babylon",
+      "source": "./plugin",
+      "description": "babylon agent-coordination: MCP hub client + skill + /babylon command + auto-sync hook"
+    }
+  ]
+}
