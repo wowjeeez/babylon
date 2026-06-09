@@ -1,0 +1,9 @@
+/target
+*.db
+*.db-wal
+*.db-shm
+.mcp.json
+/secrets
+*.env
+
+/docs/superpowers/

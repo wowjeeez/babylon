@@ -1,0 +1,17 @@
+[package]
+name = "babylon-mcp"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+babylon-core = { path = "../babylon-core" }
+rmcp.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+http.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

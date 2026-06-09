@@ -1,0 +1,39 @@
+[package]
+name = "babylon-server"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[lib]
+name = "babylon_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "babylon-server"
+path = "src/main.rs"
+
+[dependencies]
+babylon-core = { path = "../babylon-core" }
+babylon-mcp = { path = "../babylon-mcp" }
+rmcp.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+http.workspace = true
+tokio.workspace = true
+sqlx.workspace = true
+figment.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+anyhow.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true
+tempfile = "3"
+rmcp = { version = "1.7", features = ["client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "reqwest"] }
+
+[lints]
+workspace = true

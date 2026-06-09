@@ -1,0 +1,18 @@
+[Unit]
+Description=Babylon agent-coordination MCP hub
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=babylon
+EnvironmentFile=/etc/babylon/env
+ExecStart=/usr/local/bin/babylon-server serve
+Restart=always
+RestartSec=2
+WatchdogSec=30
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/babylon
+
+[Install]
+WantedBy=multi-user.target

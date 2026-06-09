@@ -1,0 +1,21 @@
+[package]
+name = "babylon-cli"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "babylon"
+path = "src/main.rs"
+
+[dependencies]
+rmcp = { version = "1.7", features = ["client", "transport-streamable-http-client", "transport-streamable-http-client-reqwest", "reqwest"] }
+reqwest.workspace = true
+tokio.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+http.workspace = true
+
+[lints]
+workspace = true

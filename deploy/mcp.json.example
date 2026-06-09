@@ -1,0 +1,2 @@
+{ "mcpServers": { "babylon": { "type": "http", "url": "https://<vm>.<tailnet>.ts.net/mcp",
+                               "headers": { "Authorization": "Bearer ${BABYLON_TOKEN}" } } } }

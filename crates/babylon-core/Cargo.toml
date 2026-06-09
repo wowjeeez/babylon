@@ -1,0 +1,24 @@
+[package]
+name = "babylon-core"
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+
+[dependencies]
+tokio.workspace = true
+sqlx.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+dashmap.workspace = true
+sha2.workspace = true
+rand.workspace = true
+base64ct.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true
