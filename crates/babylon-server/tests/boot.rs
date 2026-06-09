@@ -30,6 +30,7 @@ async fn server_boots_and_healthz_ok() -> anyhow::Result<()> {
         bind: bind.clone(),
         dev_no_auth: true,
         allow_funnel: false,
+        owner_login: None,
     };
 
     let srv = tokio::spawn(async move {

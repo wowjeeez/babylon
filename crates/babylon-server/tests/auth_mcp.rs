@@ -27,6 +27,7 @@ async fn prod_auth_valid_token_can_register_and_list() -> anyhow::Result<()> {
         bind: bind.clone(),
         dev_no_auth: false,
         allow_funnel: true,
+        owner_login: None,
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;
@@ -74,6 +75,7 @@ async fn prod_auth_bogus_token_rejected() -> anyhow::Result<()> {
         bind: bind.clone(),
         dev_no_auth: false,
         allow_funnel: true,
+        owner_login: None,
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;
@@ -115,6 +117,7 @@ async fn prod_auth_revoked_token_rejected() -> anyhow::Result<()> {
         bind: bind.clone(),
         dev_no_auth: false,
         allow_funnel: true,
+        owner_login: None,
     };
     let srv = tokio::spawn(async move {
         let _ = serve::run(cfg).await;

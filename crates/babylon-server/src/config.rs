@@ -10,6 +10,8 @@ pub struct Config {
     pub dev_no_auth: bool,
     #[serde(default, deserialize_with = "de_lenient_bool")]
     pub allow_funnel: bool,
+    #[serde(default)]
+    pub owner_login: Option<String>,
 }
 
 fn default_db() -> String {

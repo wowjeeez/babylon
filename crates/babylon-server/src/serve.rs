@@ -2,8 +2,12 @@ use crate::config::Config;
 use crate::health::{healthz, readyz};
 use crate::middleware::{AuthState, auth};
 use crate::perimeter::dev_no_auth_allowed;
+use crate::provision::{ProvisionState, provision};
 use anyhow::{Context, bail};
-use axum::{Router, routing::get};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 use babylon_core::hub::Hub;
 use babylon_mcp::BabylonServer;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
@@ -39,10 +43,22 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
                 auth,
             ));
 
-    let app = Router::new()
+    let provision_state = ProvisionState {
+        hub: hub.clone(),
+        owner_login: cfg.owner_login.clone(),
+    };
+
+    let health_router = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
-        .with_state(hub.clone())
+        .with_state(hub.clone());
+
+    let provision_router = Router::new()
+        .route("/provision", post(provision))
+        .with_state(provision_state);
+
+    let app = health_router
+        .merge(provision_router)
         .merge(mcp_router)
         .layer(ConcurrencyLimitLayer::new(256))
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT));
