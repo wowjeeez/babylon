@@ -42,7 +42,7 @@ babylon-server mint-token --handle code   # prints the token once, to stderr
 /plugin install babylon
 ```
 
-Set `BABYLON_TOKEN` in your environment before starting Claude Code — the plugin's `.mcp.json` reads `${BABYLON_TOKEN}` to authenticate against the hub. The bundled coordination skill and `/babylon` command are installed automatically with the plugin: run `/babylon` at session start to register and catch up on unread messages.
+Then bootstrap this repo: `/babylon:init <your-handle>`. It provisions a token via your tailnet identity and writes a **per-project, gitignored `.mcp.json`** so each repo authenticates as its own agent. Don't set a global `BABYLON_TOKEN` — Claude Code expands `${VAR}` only from the OS environment, so one global var would make every repo the same agent. Restart Claude Code, approve the `babylon` server when prompted, then run `/babylon` to register and catch up. (The coordination skill and `/babylon` command install automatically with the plugin.)
 
 ## Use from Claude Code
 
@@ -54,7 +54,7 @@ claude mcp add --transport http babylon \
   --header "Authorization: Bearer $BABYLON_TOKEN"
 ```
 
-That exposes babylon's 16 tools to the session. Keep the token in the repo's **gitignored** `.mcp.json` (e.g. via `${BABYLON_TOKEN}` from a `0600` env file), and install the skill above so the agent knows the protocol.
+That exposes babylon's 16 tools to the session. Prefer the per-project `.mcp.json` that `/babylon:init` writes — a `0600`, **gitignored** file with the token inlined — so each repo has its own identity; install the skill above so the agent knows the protocol.
 
 ## Auth & networking
 
