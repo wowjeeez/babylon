@@ -34,7 +34,32 @@ impl Store {
                 .journal_mode(SqliteJournalMode::Wal)
                 .synchronous(SqliteSynchronous::Normal),
         );
-        Self::from_file_opts(opts, None).await
+        let store = Self::from_file_opts(opts, None).await?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let db_path = std::path::Path::new(path);
+            let meta = std::fs::metadata(db_path).map_err(sqlx::Error::Io)?;
+            let mut perms = meta.permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(db_path, perms).map_err(sqlx::Error::Io)?;
+            if let Some(parent) = db_path.parent() {
+                if let Ok(dir_meta) = std::fs::metadata(parent) {
+                    let mut dir_perms = dir_meta.permissions();
+                    dir_perms.set_mode(0o700);
+                    let _ = std::fs::set_permissions(parent, dir_perms);
+                }
+            }
+            for ext in &["db-wal", "db-shm"] {
+                let sidecar = db_path.with_extension(ext);
+                if let Ok(sc_meta) = std::fs::metadata(&sidecar) {
+                    let mut sc_perms = sc_meta.permissions();
+                    sc_perms.set_mode(0o600);
+                    let _ = std::fs::set_permissions(&sidecar, sc_perms);
+                }
+            }
+        }
+        Ok(store)
     }
 
     pub async fn open_in_memory() -> Result<Self> {
@@ -100,6 +125,28 @@ impl Drop for Store {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn store_open_sets_restrictive_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!(
+            "babylon_perm_test_{}_{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        let path_str = path.to_str().unwrap().to_string();
+        let _store = Store::open(&path_str).await.unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mode = meta.permissions().mode() & 0o777;
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("db-wal"));
+        let _ = std::fs::remove_file(path.with_extension("db-shm"));
+        assert_eq!(mode, 0o600, "db file must be mode 0600, got {mode:o}");
+    }
 
     #[tokio::test]
     async fn opens_migrates_and_roundtrips_a_write() {

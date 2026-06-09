@@ -26,6 +26,10 @@ pub enum Error {
     BadResolveTarget(i64),
     #[error("not authorized to resolve message {0}")]
     NotAuthorizedToResolve(i64),
+    #[error("not authorized: {0}")]
+    NotAuthorized(String),
+    #[error("handle already exists: {0}; use rotate_token to get a new token")]
+    HandleExists(String),
     #[error("task needs at least one assignee mention")]
     TaskNeedsAssignee,
     #[error("database error: {0}")]

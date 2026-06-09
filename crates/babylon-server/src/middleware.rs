@@ -20,10 +20,21 @@ pub async fn auth(
     next: Next,
 ) -> Result<Response, StatusCode> {
     let handle = if st.dev_no_auth {
-        req.headers()
+        let h = req
+            .headers()
             .get("x-babylon-handle")
             .and_then(|v| v.to_str().ok())
-            .map(str::to_string)
+            .map(str::to_string);
+        match h {
+            Some(h) => {
+                let exists = st.hub.agent_exists(&h).await.unwrap_or(false);
+                if !exists {
+                    return Err(StatusCode::UNAUTHORIZED);
+                }
+                Some(h)
+            }
+            None => None,
+        }
     } else {
         let token = req
             .headers()

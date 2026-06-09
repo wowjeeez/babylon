@@ -1,3 +1,4 @@
+use anyhow::bail;
 use babylon_core::hub::Hub;
 use babylon_core::types::{AgentKind, Handle};
 use babylon_server::config::{self, Config};
@@ -37,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let cfg = config::Config::load()?;
     match cli.cmd {
         Cmd::Serve => {
-            check_no_funnel(&cfg);
+            check_funnel(&cfg)?;
             serve::run(cfg).await
         }
         Cmd::MintToken { handle, operator } => {
@@ -86,15 +87,43 @@ fn tailscale_funnel_active() -> Option<bool> {
     )
 }
 
-fn check_no_funnel(cfg: &Config) {
+fn check_funnel(cfg: &Config) -> anyhow::Result<()> {
+    if cfg.dev_no_auth {
+        tracing::warn!("dev_no_auth=true: skipping funnel check (loopback dev mode)");
+        return Ok(());
+    }
     if cfg.allow_funnel {
-        return;
+        tracing::warn!("BABYLON_ALLOW_FUNNEL=1: skipping funnel check");
+        return Ok(());
     }
+    check_funnel_prod()
+}
+
+fn check_funnel_prod() -> anyhow::Result<()> {
     match tailscale_funnel_active() {
-        Some(true) => tracing::warn!(
-            "tailscale Funnel appears enabled; babylon expects a private perimeter. Set BABYLON_ALLOW_FUNNEL=1 to override."
-        ),
-        Some(false) => {}
-        None => tracing::warn!("tailscale funnel status unavailable; skipping funnel check"),
+        Some(true) => reject_funnel_active(),
+        Some(false) => {
+            tracing::warn!("tailscale funnel check passed (Funnel is off)");
+            Ok(())
+        }
+        None => reject_funnel_unknown(),
     }
+}
+
+fn reject_funnel_active() -> anyhow::Result<()> {
+    tracing::error!(
+        "tailscale Funnel is enabled; refusing to start in prod. Set BABYLON_ALLOW_FUNNEL=1 to override."
+    );
+    bail!("tailscale Funnel is active; set BABYLON_ALLOW_FUNNEL=1 to override or disable Funnel")
+}
+
+fn reject_funnel_unknown() -> anyhow::Result<()> {
+    tracing::error!(
+        "cannot verify perimeter: tailscale funnel status unavailable (CLI missing or parse failure). \
+         Set BABYLON_ALLOW_FUNNEL=1 to skip."
+    );
+    bail!(
+        "cannot verify tailscale funnel status (CLI missing or parse failure); \
+         set BABYLON_ALLOW_FUNNEL=1 to skip"
+    )
 }

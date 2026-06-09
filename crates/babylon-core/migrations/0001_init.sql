@@ -48,3 +48,4 @@ CREATE TABLE subscriptions (
 CREATE INDEX idx_messages_channel_id ON messages(channel_id, id);
 CREATE INDEX idx_mentions_handle ON message_mentions(handle, message_id);
 CREATE INDEX idx_messages_kind_resolved ON messages(kind, resolved_at);
+CREATE INDEX idx_subscriptions_channel ON subscriptions(channel_id, active, handle);

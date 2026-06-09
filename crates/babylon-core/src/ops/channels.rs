@@ -44,6 +44,9 @@ impl Hub {
     }
 
     pub async fn join_channel(&self, handle: &Handle, name: &str) -> Result<()> {
+        if name.starts_with("dm:") {
+            return Err(Error::BadName(name.into()));
+        }
         let (h, nm) = (handle.as_str().to_string(), name.to_string());
         self.store
             .with_writer(move |c| {
@@ -95,11 +98,28 @@ impl Hub {
             .await
     }
 
-    pub async fn archive_channel(&self, name: &str) -> Result<()> {
-        let (nm, now) = (name.to_string(), self.now_ms());
+    pub async fn archive_channel(&self, by: &Handle, name: &str) -> Result<()> {
+        let (by_s, nm, now) = (by.as_str().to_string(), name.to_string(), self.now_ms());
         self.store
             .with_writer(move |c| {
                 Box::pin(async move {
+                    let row: Option<(Option<String>,)> =
+                        sqlx::query_as("SELECT created_by FROM channels WHERE name=?")
+                            .bind(&nm)
+                            .fetch_optional(&mut *c)
+                            .await?;
+                    let (created_by,) = row.ok_or_else(|| Error::UnknownChannel(nm.clone()))?;
+                    let is_operator: bool = sqlx::query_scalar::<_, i64>(
+                        "SELECT 1 FROM agents WHERE handle=? AND kind='operator'",
+                    )
+                    .bind(&by_s)
+                    .fetch_optional(&mut *c)
+                    .await?
+                    .is_some();
+                    let is_creator = created_by.as_deref() == Some(by_s.as_str());
+                    if !is_creator && !is_operator {
+                        return Err(Error::NotAuthorized(format!("{by_s} cannot archive {nm}")));
+                    }
                     sqlx::query("UPDATE channels SET archived_at=? WHERE name=?")
                         .bind(now)
                         .bind(nm)
@@ -172,6 +192,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn archive_channel_authz() {
+        let hub = seeded().await;
+        let creator = Handle::parse("code").unwrap();
+        let other = Handle::parse("other").unwrap();
+        let op = Handle::parse("operator").unwrap();
+        hub.mint_token(&other, AgentKind::Agent).await.unwrap();
+        hub.mint_token(&op, AgentKind::Operator).await.unwrap();
+        hub.create_channel(&creator, "deploy", "t").await.unwrap();
+        assert!(
+            matches!(
+                hub.archive_channel(&other, "deploy").await,
+                Err(crate::error::Error::NotAuthorized(_))
+            ),
+            "non-creator non-operator must be rejected"
+        );
+        hub.archive_channel(&creator, "deploy").await.unwrap();
+        hub.create_channel(&creator, "ops", "t").await.unwrap();
+        hub.archive_channel(&op, "ops").await.unwrap();
+    }
+
+    #[tokio::test]
     async fn create_rejects_dm_prefix_and_dupes() {
         let hub = seeded().await;
         let by = Handle::parse("code").unwrap();
@@ -180,6 +221,66 @@ mod tests {
             .unwrap();
         assert!(hub.create_channel(&by, "deploy", "x").await.is_err());
         assert!(hub.create_channel(&by, "dm:x+y", "x").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn join_channel_rejects_dm_prefix() {
+        let hub = seeded().await;
+        let (a, b) = (
+            Handle::parse("code").unwrap(),
+            Handle::parse("bob").unwrap(),
+        );
+        hub.mint_token(&b, AgentKind::Agent).await.unwrap();
+        let mallory = Handle::parse("mallory").unwrap();
+        hub.mint_token(&mallory, AgentKind::Agent).await.unwrap();
+        hub.dm(&a, &b, "note", "hello", None, None).await.unwrap();
+        let err = hub.join_channel(&mallory, "dm:bob+code").await;
+        assert!(
+            matches!(err, Err(crate::error::Error::BadName(_))),
+            "join_channel must reject dm: prefix"
+        );
+    }
+
+    #[tokio::test]
+    async fn stray_dm_subscription_excluded_from_catch_up() {
+        let hub = seeded().await;
+        let code = Handle::parse("code").unwrap();
+        let bob = Handle::parse("bob").unwrap();
+        hub.mint_token(&bob, AgentKind::Agent).await.unwrap();
+        let mallory = Handle::parse("mallory").unwrap();
+        hub.mint_token(&mallory, AgentKind::Agent).await.unwrap();
+        let (id, chname) = hub
+            .dm(&code, &bob, "note", "secret", None, None)
+            .await
+            .unwrap();
+        let cid: i64 = hub
+            .store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    let cid: i64 = sqlx::query_scalar("SELECT id FROM channels WHERE name=?")
+                        .bind(&chname)
+                        .fetch_one(&mut *c)
+                        .await?;
+                    sqlx::query(
+                        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+                         VALUES (?,?,0,1) \
+                         ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
+                    )
+                    .bind("mallory")
+                    .bind(cid)
+                    .execute(c)
+                    .await?;
+                    Ok::<i64, crate::error::Error>(cid)
+                })
+            })
+            .await
+            .unwrap();
+        let _ = cid;
+        let cu = hub.catch_up(&mallory, None, false, 50).await.unwrap();
+        assert!(
+            cu.messages.iter().all(|m| m.id != id),
+            "stray dm subscription must not expose dm messages"
+        );
     }
 
     #[tokio::test]

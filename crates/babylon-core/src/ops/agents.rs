@@ -13,6 +13,14 @@ impl Hub {
         self.store
             .with_writer(move |c| {
                 Box::pin(async move {
+                    let existing: Option<i64> =
+                        sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
+                            .bind(&h)
+                            .fetch_optional(&mut *c)
+                            .await?;
+                    if existing.is_some() {
+                        return Err(Error::HandleExists(h));
+                    }
                     sqlx::query(
                         "INSERT INTO agents(handle, kind, token_hash, created_at) VALUES (?,?,?,?)",
                     )
@@ -127,6 +135,14 @@ impl Hub {
         Ok(rows.into_iter().filter(|(_, n)| *n > 0).collect())
     }
 
+    pub async fn agent_exists(&self, handle: &str) -> Result<bool> {
+        let row: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
+            .bind(handle)
+            .fetch_optional(self.store.reader())
+            .await?;
+        Ok(row.is_some())
+    }
+
     pub async fn list_agents(&self) -> Result<Vec<AgentInfo>> {
         let rows: Vec<(String, Option<String>, String, i64)> =
             sqlx::query_as("SELECT handle, role, kind, last_seen_at FROM agents ORDER BY handle")
@@ -153,6 +169,23 @@ impl Hub {
 mod tests {
     use crate::hub::Hub;
     use crate::types::{AgentKind, Handle};
+
+    #[tokio::test]
+    async fn mint_existing_handle_returns_handle_exists() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let h = Handle::parse("code").unwrap();
+        let original_token = hub.mint_token(&h, AgentKind::Agent).await.unwrap();
+        let err = hub.mint_token(&h, AgentKind::Agent).await;
+        assert!(
+            matches!(err, Err(crate::error::Error::HandleExists(_))),
+            "minting existing handle must return HandleExists, got {err:?}"
+        );
+        assert_eq!(
+            hub.resolve_token(&original_token).await.unwrap().as_str(),
+            "code",
+            "original token must still be valid after failed re-mint"
+        );
+    }
 
     #[tokio::test]
     async fn mint_then_resolve_then_revoke() {

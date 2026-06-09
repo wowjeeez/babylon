@@ -2,7 +2,8 @@ use crate::dto::{CatchUp, MsgFull, MsgSummary};
 use crate::error::{Error, Result};
 use crate::hub::Hub;
 use crate::types::Handle;
-use std::collections::BTreeMap;
+use sqlx::SqlitePool;
+use std::collections::{BTreeMap, HashMap};
 
 const DEFAULT_LIMIT: i64 = 50;
 
@@ -77,6 +78,44 @@ impl MsgRowFull {
     }
 }
 
+async fn load_batch_mentions(ids: &[i64], pool: &SqlitePool) -> Result<HashMap<i64, Vec<String>>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT message_id, handle FROM message_mentions WHERE message_id IN ({placeholders}) ORDER BY handle"
+    );
+    let mut q = sqlx::query_as::<_, (i64, String)>(&sql);
+    for &id in ids {
+        q = q.bind(id);
+    }
+    let rows = q.fetch_all(pool).await?;
+    let mut map: HashMap<i64, Vec<String>> = HashMap::new();
+    for (mid, handle) in rows {
+        map.entry(mid).or_default().push(handle);
+    }
+    Ok(map)
+}
+
+async fn batch_fill_mentions(msgs: &mut [MsgSummary], pool: &SqlitePool) -> Result<()> {
+    let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+    let mut map = load_batch_mentions(&ids, pool).await?;
+    for m in msgs.iter_mut() {
+        m.to = map.remove(&m.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
+async fn batch_fill_full_mentions(msgs: &mut [MsgFull], pool: &SqlitePool) -> Result<()> {
+    let ids: Vec<i64> = msgs.iter().map(|m| m.id).collect();
+    let mut map = load_batch_mentions(&ids, pool).await?;
+    for m in msgs.iter_mut() {
+        m.to = map.remove(&m.id).unwrap_or_default();
+    }
+    Ok(())
+}
+
 impl Hub {
     pub async fn catch_up(
         &self,
@@ -97,10 +136,15 @@ impl Hub {
                     let row: Option<(i64, i64)> = sqlx::query_as(
                         "SELECT c.id, s.last_acked_id FROM subscriptions s \
                          JOIN channels c ON c.id=s.channel_id \
-                         WHERE s.handle=? AND s.active=1 AND c.name=?",
+                         WHERE s.handle=? AND s.active=1 AND c.name=? \
+                         AND (c.kind <> 'dm' OR EXISTS (\
+                           SELECT 1 FROM channel_members cm \
+                           WHERE cm.channel_id = c.id AND cm.handle = ?\
+                         ))",
                     )
                     .bind(handle.as_str())
                     .bind(n)
+                    .bind(handle.as_str())
                     .fetch_optional(self.store.reader())
                     .await?;
                     if let Some((id, cur)) = row {
@@ -113,8 +157,13 @@ impl Hub {
                 sqlx::query_as(
                     "SELECT c.id, c.name, s.last_acked_id FROM subscriptions s \
                      JOIN channels c ON c.id=s.channel_id \
-                     WHERE s.handle=? AND s.active=1",
+                     WHERE s.handle=? AND s.active=1 \
+                     AND (c.kind <> 'dm' OR EXISTS (\
+                       SELECT 1 FROM channel_members cm \
+                       WHERE cm.channel_id = c.id AND cm.handle = ?\
+                     ))",
                 )
+                .bind(handle.as_str())
                 .bind(handle.as_str())
                 .fetch_all(self.store.reader())
                 .await?
@@ -158,6 +207,7 @@ impl Hub {
             }
         }
         messages.sort_by_key(|m| m.id);
+        batch_fill_mentions(&mut messages, self.store.reader()).await?;
         Ok(CatchUp {
             messages,
             next_cursors,
@@ -182,6 +232,7 @@ impl Hub {
             }
             out.push(r.into_full());
         }
+        batch_fill_full_mentions(&mut out, self.store.reader()).await?;
         Ok(out)
     }
 
@@ -262,6 +313,41 @@ impl Hub {
 mod tests {
     use crate::hub::Hub;
     use crate::types::{AgentKind, Handle};
+
+    #[tokio::test]
+    async fn task_mentions_populated_in_catch_up_and_read() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let code = Handle::parse("code").unwrap();
+        let deploy = Handle::parse("deploy").unwrap();
+        hub.mint_token(&code, AgentKind::Agent).await.unwrap();
+        hub.mint_token(&deploy, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "deploy", "t").await.unwrap();
+        let id = hub
+            .post(
+                &code,
+                "deploy",
+                "task",
+                "do the thing",
+                Some("body"),
+                &["deploy".into()],
+                None,
+            )
+            .await
+            .unwrap();
+        let cu = hub.catch_up(&deploy, None, false, 50).await.unwrap();
+        let msg = cu.messages.iter().find(|m| m.id == id).unwrap();
+        assert_eq!(
+            msg.to,
+            vec!["deploy".to_string()],
+            "catch_up must populate to"
+        );
+        let full = hub.read(&deploy, &[id]).await.unwrap();
+        assert_eq!(
+            full[0].to,
+            vec!["deploy".to_string()],
+            "read must populate to"
+        );
+    }
 
     #[tokio::test]
     async fn catch_up_is_non_advancing_and_paginates_per_channel() {

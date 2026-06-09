@@ -17,6 +17,8 @@ struct Cli {
     token: Option<String>,
     #[arg(long, env = "BABYLON_HANDLE")]
     handle: Option<String>,
+    #[arg(long)]
+    dev: bool,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -82,19 +84,22 @@ async fn main() -> anyhow::Result<()> {
     };
 
     let mut config = StreamableHttpClientTransportConfig::with_uri(cli.url);
-    match (cli.handle, cli.token) {
-        (Some(handle), _) => {
+    match (cli.token, cli.dev, cli.handle) {
+        (Some(token), _, _) => {
+            config = config.auth_header(token);
+        }
+        (None, true, Some(handle)) => {
             let name = HeaderName::from_static("x-babylon-handle");
             let value = HeaderValue::from_str(&handle).context("invalid handle header value")?;
             let mut headers = HashMap::new();
             headers.insert(name, value);
             config = config.custom_headers(headers);
         }
-        (None, Some(token)) => {
-            config = config.auth_header(token);
+        (None, true, None) => {
+            bail!("--dev requires BABYLON_HANDLE (or --handle)");
         }
-        (None, None) => {
-            bail!("set BABYLON_TOKEN (or --token), or BABYLON_HANDLE (or --handle) for dev mode");
+        (None, false, _) => {
+            bail!("set BABYLON_TOKEN, or --dev with BABYLON_HANDLE");
         }
     }
 

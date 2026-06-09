@@ -15,8 +15,13 @@ struct WaitGuard<'a> {
 
 impl Drop for WaitGuard<'_> {
     fn drop(&mut self) {
-        if let Some(mut e) = self.hub.waits.get_mut(&self.key) {
+        let remove = self.hub.waits.get_mut(&self.key).is_some_and(|mut e| {
             *e = e.saturating_sub(1);
+            *e == 0
+        });
+        if remove {
+            self.hub.waits.remove(&self.key);
+            self.hub.waiters.release(&self.key);
         }
     }
 }
@@ -226,6 +231,54 @@ mod tests {
     use crate::hub::Hub;
     use crate::types::{AgentKind, Handle};
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn wait_for_only_mentions_woken_by_mention_post() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let code = Handle::parse("code").unwrap();
+        let deploy = Handle::parse("deploy").unwrap();
+        hub.mint_token(&code, AgentKind::Agent).await.unwrap();
+        hub.mint_token(&deploy, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "deploy", "t").await.unwrap();
+        let h2 = hub.clone();
+        let waiter = tokio::spawn(async move {
+            h2.wait_for(&Handle::parse("deploy").unwrap(), 5, None, true)
+                .await
+                .unwrap()
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let id = hub
+            .post(
+                &code,
+                "deploy",
+                "task",
+                "deploy now",
+                None,
+                &["deploy".into()],
+                None,
+            )
+            .await
+            .unwrap();
+        let cu = waiter.await.unwrap();
+        assert_eq!(cu.woke, Some(true), "waiter must wake on mention");
+        assert_eq!(
+            cu.messages.iter().map(|m| m.id).collect::<Vec<_>>(),
+            vec![id]
+        );
+    }
+
+    #[tokio::test]
+    async fn wait_for_timeout_cleans_up_waits_entry() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let bob = Handle::parse("bob").unwrap();
+        hub.mint_token(&bob, AgentKind::Agent).await.unwrap();
+        let cu = hub.wait_for(&bob, 1, None, false).await.unwrap();
+        assert_eq!(cu.woke, Some(false));
+        assert!(
+            !hub.waits.contains_key("bob"),
+            "waits map must not retain zero-count entry after timeout"
+        );
+    }
 
     #[tokio::test]
     async fn wait_for_caps_concurrent_per_handle() {

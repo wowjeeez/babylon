@@ -86,10 +86,16 @@ pub struct BabylonServer {
 
 fn map_err(e: CoreError) -> McpError {
     match e {
-        CoreError::Unauthorized | CoreError::TokenRevoked => {
-            McpError::invalid_request(e.to_string(), None)
+        CoreError::Unauthorized
+        | CoreError::TokenRevoked
+        | CoreError::NotAuthorized(_)
+        | CoreError::NotAuthorizedToResolve(_)
+        | CoreError::NotAMember(_)
+        | CoreError::NotSubscribed(_) => McpError::invalid_request(e.to_string(), None),
+        CoreError::Db(ref inner) => {
+            tracing::error!(error = %inner, "database error");
+            McpError::internal_error("internal error", None)
         }
-        CoreError::Db(_) => McpError::internal_error(e.to_string(), None),
         other => McpError::invalid_params(other.to_string(), None),
     }
 }
@@ -186,8 +192,11 @@ impl BabylonServer {
         Parameters(p): Parameters<ChannelNameParams>,
         ctx: RequestContext<RoleServer>,
     ) -> Result<Json<OkResult>, McpError> {
-        let _ = Self::caller(&ctx)?;
-        self.hub.archive_channel(&p.name).await.map_err(map_err)?;
+        let h = Self::caller(&ctx)?;
+        self.hub
+            .archive_channel(&h, &p.name)
+            .await
+            .map_err(map_err)?;
         Ok(Json(OkResult { ok: true }))
     }
 

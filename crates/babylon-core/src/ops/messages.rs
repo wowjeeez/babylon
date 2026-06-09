@@ -4,6 +4,7 @@ use crate::types::{Handle, MessageKind};
 use sqlx::Connection;
 
 impl Hub {
+    #[allow(clippy::too_many_lines)]
     pub async fn dm(
         &self,
         from: &Handle,
@@ -13,14 +14,27 @@ impl Hub {
         body: Option<&str>,
         reply_to: Option<i64>,
     ) -> Result<(i64, String)> {
+        if summary.is_empty() || summary.len() > MAX_SUMMARY {
+            return Err(Error::TooLarge("summary".into()));
+        }
+        if body.is_some_and(|b| b.len() > MAX_BODY) {
+            return Err(Error::TooLarge("body".into()));
+        }
+        let k = MessageKind::parse(kind)?;
+        let kind_s = k.as_str().to_string();
+
         let name = crate::types::dm_channel_name(from, to);
-        let (n2, a, b, now) = (
+        let (n2, a, b, summary_s, body_s, now) = (
             name.clone(),
             from.as_str().to_string(),
             to.as_str().to_string(),
+            summary.to_string(),
+            body.map(str::to_string),
             self.now_ms(),
         );
-        self.store
+        let reply_to_val = reply_to;
+        let (id, wake_names) = self
+            .store
             .with_writer(move |c| {
                 Box::pin(async move {
                     let mut tx = c.begin().await?;
@@ -68,14 +82,54 @@ impl Hub {
                         .execute(&mut *tx)
                         .await?;
                     }
+
+                    let msg_id: i64 = sqlx::query_scalar(
+                        "INSERT INTO messages(channel_id, author, kind, summary, body, reply_to, created_at) \
+                         VALUES (?,?,?,?,?,?,?) RETURNING id",
+                    )
+                    .bind(cid)
+                    .bind(&a)
+                    .bind(&kind_s)
+                    .bind(&summary_s)
+                    .bind(&body_s)
+                    .bind(reply_to_val)
+                    .bind(now)
+                    .fetch_one(&mut *tx)
+                    .await?;
+
+                    sqlx::query(
+                        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+                         VALUES (?,?,?,1) \
+                         ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
+                    )
+                    .bind(&a)
+                    .bind(cid)
+                    .bind(msg_id)
+                    .execute(&mut *tx)
+                    .await?;
+
                     tx.commit().await?;
-                    Ok(())
+
+                    let names: Vec<String> = sqlx::query_scalar(
+                        "SELECT s.handle FROM subscriptions s \
+                         JOIN channels c ON c.id = s.channel_id \
+                         WHERE c.id = ? AND s.active = 1 \
+                         AND (c.kind <> 'dm' OR EXISTS (\
+                           SELECT 1 FROM channel_members cm \
+                           WHERE cm.channel_id = c.id AND cm.handle = s.handle\
+                         ))",
+                    )
+                    .bind(cid)
+                    .fetch_all(c)
+                    .await?;
+
+                    Ok::<(i64, Vec<String>), Error>((msg_id, names))
                 })
             })
             .await?;
-        let id = self
-            .post(from, &name, kind, summary, body, &[], reply_to)
-            .await?;
+        for h in &wake_names {
+            self.waiters.wake(h);
+        }
         Ok((id, name))
     }
 }
@@ -119,7 +173,7 @@ impl Hub {
         let kind_s = k.as_str().to_string();
         let now = self.now_ms();
 
-        let new_id = self
+        let (new_id, wake_names) = self
             .store
             .with_writer(move |c| {
                 Box::pin(async move {
@@ -227,21 +281,27 @@ impl Hub {
                         }
                     }
                     tx.commit().await?;
-                    Ok::<i64, Error>(id)
+
+                    let names: Vec<String> = sqlx::query_scalar(
+                        "SELECT s.handle FROM subscriptions s \
+                         JOIN channels c ON c.id = s.channel_id \
+                         WHERE c.id = ? AND s.active = 1 \
+                         AND (c.kind <> 'dm' OR EXISTS (\
+                           SELECT 1 FROM channel_members cm \
+                           WHERE cm.channel_id = c.id AND cm.handle = s.handle\
+                         ))",
+                    )
+                    .bind(cid)
+                    .fetch_all(c)
+                    .await?;
+
+                    Ok::<(i64, Vec<String>), Error>((id, names))
                 })
             })
             .await?;
 
-        let names: Vec<String> = sqlx::query_scalar(
-            "SELECT s.handle FROM subscriptions s JOIN messages m ON m.id=? \
-             WHERE s.channel_id=m.channel_id AND s.active=1",
-        )
-        .bind(new_id)
-        .fetch_all(self.store.reader())
-        .await
-        .unwrap_or_default();
-        for h in names {
-            self.waiters.wake(&h);
+        for h in &wake_names {
+            self.waiters.wake(h);
         }
         Ok(new_id)
     }
@@ -344,6 +404,22 @@ mod tests {
         let cu = hub.catch_up(&mallory, None, false, 50).await.unwrap();
         assert!(cu.messages.is_empty());
         assert!(hub.read(&mallory, &[id]).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dm_invalid_kind_returns_error_and_no_channel_created() {
+        let (hub, code, deploy) = fixture().await;
+        let err = hub
+            .dm(&code, &deploy, "bogus-kind", "hello", None, None)
+            .await;
+        assert!(err.is_err(), "dm with invalid kind must fail");
+        let chname = crate::types::dm_channel_name(&code, &deploy);
+        let exists: Option<i64> = sqlx::query_scalar("SELECT id FROM channels WHERE name=?")
+            .bind(&chname)
+            .fetch_optional(hub.store.reader())
+            .await
+            .unwrap();
+        assert!(exists.is_none(), "no channel must be created on dm failure");
     }
 
     #[tokio::test]

@@ -21,4 +21,8 @@ impl Waiters {
             n.notify_waiters();
         }
     }
+
+    pub fn release(&self, handle: &str) {
+        self.map.remove_if(handle, |_, v| Arc::strong_count(v) == 1);
+    }
 }
