@@ -74,3 +74,21 @@ pub struct ResolveResult {
     pub resolved_at: i64,
     pub resolved_by: String,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AdminChannelInfo {
+    pub name: String,
+    pub topic: String,
+    pub kind: String,
+    pub archived: bool,
+    pub member_count: i64,
+    pub message_count: i64,
+    pub last_activity_ts: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct GlobalStats {
+    pub agents: i64,
+    pub channels: i64,
+    pub messages: i64,
+}

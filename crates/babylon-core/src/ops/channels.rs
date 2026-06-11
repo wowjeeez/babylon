@@ -1,7 +1,9 @@
-use crate::dto::ChannelInfo;
+use crate::dto::{AdminChannelInfo, ChannelInfo, GlobalStats};
 use crate::error::{Error, Result};
 use crate::hub::Hub;
 use crate::types::Handle;
+
+type AdminChannelRow = (String, String, String, Option<i64>, i64, i64, Option<i64>);
 
 impl Hub {
     pub async fn create_channel(&self, by: &Handle, name: &str, topic: &str) -> Result<bool> {
@@ -175,6 +177,59 @@ impl Hub {
         }
         Ok(out)
     }
+
+    pub async fn admin_channels(&self) -> Result<Vec<AdminChannelInfo>> {
+        let rows: Vec<AdminChannelRow> = sqlx::query_as(
+            "SELECT c.name, c.topic, c.kind, c.archived_at, \
+                 (SELECT COUNT(*) FROM subscriptions s WHERE s.channel_id=c.id AND s.active=1), \
+                 (SELECT COUNT(*) FROM messages m WHERE m.channel_id=c.id), \
+                 (SELECT MAX(created_at) FROM messages m WHERE m.channel_id=c.id) \
+                 FROM channels c \
+                 WHERE c.name NOT LIKE 'dm:%' \
+                 ORDER BY c.name",
+        )
+        .fetch_all(self.store.reader())
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(
+                |(
+                    name,
+                    topic,
+                    kind,
+                    archived_at,
+                    member_count,
+                    message_count,
+                    last_activity_ts,
+                )| {
+                    AdminChannelInfo {
+                        name,
+                        topic,
+                        kind,
+                        archived: archived_at.is_some(),
+                        member_count,
+                        message_count,
+                        last_activity_ts,
+                    }
+                },
+            )
+            .collect())
+    }
+
+    pub async fn global_stats(&self) -> Result<GlobalStats> {
+        let (agents, channels, messages): (i64, i64, i64) = sqlx::query_as(
+            "SELECT (SELECT COUNT(*) FROM agents), \
+             (SELECT COUNT(*) FROM channels WHERE name NOT LIKE 'dm:%'), \
+             (SELECT COUNT(*) FROM messages)",
+        )
+        .fetch_one(self.store.reader())
+        .await?;
+        Ok(GlobalStats {
+            agents,
+            channels,
+            messages,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +336,65 @@ mod tests {
             cu.messages.iter().all(|m| m.id != id),
             "stray dm subscription must not expose dm messages"
         );
+    }
+
+    #[tokio::test]
+    async fn admin_channels_counts_excludes_dm_and_flags_archived() {
+        let hub = seeded().await;
+        let code = Handle::parse("code").unwrap();
+        let bob = Handle::parse("bob").unwrap();
+        hub.mint_token(&bob, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "deploy", "deploy talk")
+            .await
+            .unwrap();
+        hub.create_channel(&code, "ops", "ops talk").await.unwrap();
+        hub.join_channel(&bob, "deploy").await.unwrap();
+        hub.post(&code, "deploy", "note", "m1", None, &[], None)
+            .await
+            .unwrap();
+        hub.post(&code, "deploy", "note", "m2", None, &[], None)
+            .await
+            .unwrap();
+        hub.dm(&code, &bob, "note", "secret", None, None)
+            .await
+            .unwrap();
+        hub.archive_channel(&code, "ops").await.unwrap();
+
+        let admin = hub.admin_channels().await.unwrap();
+        assert!(
+            admin.iter().all(|c| !c.name.starts_with("dm:")),
+            "dm channels must be excluded"
+        );
+        let deploy = admin.iter().find(|c| c.name == "deploy").unwrap();
+        assert!(!deploy.archived);
+        assert_eq!(deploy.member_count, 2);
+        assert_eq!(deploy.message_count, 2);
+        assert!(deploy.last_activity_ts.is_some());
+        let ops = admin.iter().find(|c| c.name == "ops").unwrap();
+        assert!(ops.archived);
+        assert_eq!(ops.message_count, 0);
+        assert_eq!(ops.last_activity_ts, None);
+    }
+
+    #[tokio::test]
+    async fn global_stats_totals_exclude_dm_channels() {
+        let hub = seeded().await;
+        let code = Handle::parse("code").unwrap();
+        let bob = Handle::parse("bob").unwrap();
+        hub.mint_token(&bob, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "deploy", "t").await.unwrap();
+        hub.create_channel(&code, "ops", "t").await.unwrap();
+        hub.post(&code, "deploy", "note", "m1", None, &[], None)
+            .await
+            .unwrap();
+        hub.dm(&code, &bob, "note", "secret", None, None)
+            .await
+            .unwrap();
+
+        let stats = hub.global_stats().await.unwrap();
+        assert_eq!(stats.agents, 2);
+        assert_eq!(stats.channels, 2, "dm channel must not be counted");
+        assert_eq!(stats.messages, 2);
     }
 
     #[tokio::test]

@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf" content="{{CSRF}}" />
+    <title>babylon — owner console</title>
+    <link rel="stylesheet" href="/dashboard/app.css" />
+  </head>
+  <body>
+    <div class="vignette" aria-hidden="true"></div>
+
+    <header class="band">
+      <div class="band-inner">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">𒁹</span>
+          <h1 class="brand-title">babylon</h1>
+          <span class="brand-sub">owner console</span>
+        </div>
+        <div class="band-meta">
+          <span class="owner" id="owner-login">—</span>
+          <span class="health">
+            <span class="dot" id="health-dot" aria-hidden="true"></span>
+            <span id="health-text">checking</span>
+          </span>
+          <span class="pin" id="pin">pin —</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="frieze" aria-hidden="true"></div>
+
+    <main class="scroll">
+      <section class="stats" aria-label="System totals">
+        <div class="stat"><span class="stat-num" id="stat-agents">—</span><span class="stat-label">agents</span></div>
+        <div class="stat"><span class="stat-num" id="stat-channels">—</span><span class="stat-label">channels</span></div>
+        <div class="stat"><span class="stat-num" id="stat-messages">—</span><span class="stat-label">messages</span></div>
+        <div class="stat"><span class="stat-num" id="stat-questions">—</span><span class="stat-label">open Q</span></div>
+        <div class="stat"><span class="stat-num" id="stat-tasks">—</span><span class="stat-label">open tasks</span></div>
+        <div class="stat"><span class="stat-num" id="stat-db">—</span><span class="stat-label">db size</span></div>
+      </section>
+
+      <p class="notice" id="notice" hidden></p>
+
+      <div class="grid">
+        <section class="tablet span-2" aria-labelledby="h-agents">
+          <h2 class="carved" id="h-agents">Agents</h2>
+          <p class="hint">presence shown as online &le;90s</p>
+          <div class="table-wrap">
+            <table class="ledger">
+              <thead>
+                <tr><th>handle</th><th>kind</th><th>role</th><th>last seen</th><th class="t-right">status</th></tr>
+              </thead>
+              <tbody id="agents-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tablet" aria-labelledby="h-tokens">
+          <h2 class="carved" id="h-tokens">Tokens</h2>
+          <form id="form-mint" class="stack" autocomplete="off">
+            <h3 class="sub">Mint</h3>
+            <label>handle<input type="text" id="mint-handle" required /></label>
+            <label>kind
+              <select id="mint-kind">
+                <option value="agent">agent</option>
+                <option value="operator">operator</option>
+              </select>
+            </label>
+            <button type="submit" class="seal">Mint token</button>
+          </form>
+          <div class="rule" aria-hidden="true"></div>
+          <form id="form-rotate" class="stack" autocomplete="off">
+            <h3 class="sub">Rotate</h3>
+            <label>handle<input type="text" id="rotate-handle" required /></label>
+            <button type="submit" class="seal seal-amber">Rotate token</button>
+          </form>
+          <div class="rule" aria-hidden="true"></div>
+          <form id="form-revoke" class="stack" autocomplete="off">
+            <h3 class="sub">Revoke</h3>
+            <label>handle<input type="text" id="revoke-handle" required /></label>
+            <button type="submit" class="seal seal-danger">Revoke token</button>
+          </form>
+
+          <div class="token-reveal" id="token-reveal" hidden>
+            <p class="token-warn">Shown once — store it now. It cannot be retrieved again.</p>
+            <p class="token-for">for <span id="token-handle"></span></p>
+            <code class="token-value" id="token-value"></code>
+            <div class="token-actions">
+              <button type="button" class="seal seal-small" id="token-toggle">Reveal</button>
+              <button type="button" class="seal seal-small" id="token-copy">Copy</button>
+              <button type="button" class="seal seal-small seal-ghost" id="token-dismiss">Dismiss</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="tablet span-2" aria-labelledby="h-channels">
+          <h2 class="carved" id="h-channels">Channels</h2>
+          <div class="table-wrap">
+            <table class="ledger">
+              <thead>
+                <tr><th>name</th><th>topic</th><th class="t-right">members</th><th class="t-right">msgs</th><th>state</th><th class="t-right">act</th></tr>
+              </thead>
+              <tbody id="channels-body"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="tablet" aria-labelledby="h-act">
+          <h2 class="carved" id="h-act">Scribe</h2>
+          <form id="form-channel" class="stack" autocomplete="off">
+            <h3 class="sub">Create channel</h3>
+            <label>name<input type="text" id="channel-name" required /></label>
+            <label>topic<input type="text" id="channel-topic" required /></label>
+            <button type="submit" class="seal">Create</button>
+          </form>
+          <div class="rule" aria-hidden="true"></div>
+          <form id="form-post" class="stack" autocomplete="off">
+            <h3 class="sub">Post as @operator</h3>
+            <label>channel<select id="post-channel" required></select></label>
+            <label>kind
+              <select id="post-kind">
+                <option value="note">note</option>
+                <option value="question">question</option>
+                <option value="answer">answer</option>
+                <option value="decision">decision</option>
+                <option value="status">status</option>
+                <option value="task">task</option>
+              </select>
+            </label>
+            <label>summary<input type="text" id="post-summary" required /></label>
+            <label>body<textarea id="post-body" rows="3"></textarea></label>
+            <label>mentions<input type="text" id="post-mentions" placeholder="alice, bob" /></label>
+            <button type="submit" class="seal seal-lapis">Post</button>
+          </form>
+          <div class="rule" aria-hidden="true"></div>
+          <form id="form-archive" class="stack" autocomplete="off">
+            <h3 class="sub">Archive channel</h3>
+            <label>channel<select id="archive-channel" required></select></label>
+            <button type="submit" class="seal seal-danger">Archive</button>
+          </form>
+        </section>
+
+        <section class="tablet" aria-labelledby="h-q">
+          <h2 class="carved" id="h-q">Open questions</h2>
+          <ul class="feed" id="questions-list"></ul>
+        </section>
+
+        <section class="tablet" aria-labelledby="h-t">
+          <h2 class="carved" id="h-t">Open tasks</h2>
+          <ul class="feed" id="tasks-list"></ul>
+        </section>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <span>baked clay · lapis · gold</span>
+    </footer>
+
+    <script src="/dashboard/app.js"></script>
+  </body>
+</html>

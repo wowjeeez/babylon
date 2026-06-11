@@ -1,4 +1,8 @@
 use crate::config::Config;
+use crate::dashboard::{
+    DashboardState, archive_channel, create_channel, dashboard_css, dashboard_guard, dashboard_js,
+    dashboard_page, overview, post_message, tokens_mint, tokens_revoke, tokens_rotate,
+};
 use crate::health::{healthz, readyz};
 use crate::middleware::{AuthState, auth};
 use crate::perimeter::dev_no_auth_allowed;
@@ -66,8 +70,33 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
         .route("/provision", post(provision))
         .with_state(provision_state);
 
+    let dashboard_state = DashboardState {
+        hub: hub.clone(),
+        owner_login: cfg.owner_login.clone(),
+        allowed_hosts: cfg.allowed_hosts.clone(),
+        db_path: cfg.db_path.clone(),
+    };
+
+    let dashboard_router = Router::new()
+        .route("/dashboard", get(dashboard_page))
+        .route("/dashboard/app.js", get(dashboard_js))
+        .route("/dashboard/app.css", get(dashboard_css))
+        .route("/api/overview", get(overview))
+        .route("/api/tokens/mint", post(tokens_mint))
+        .route("/api/tokens/rotate", post(tokens_rotate))
+        .route("/api/tokens/revoke", post(tokens_revoke))
+        .route("/api/channels", post(create_channel))
+        .route("/api/channels/{name}/archive", post(archive_channel))
+        .route("/api/messages", post(post_message))
+        .layer(axum::middleware::from_fn_with_state(
+            dashboard_state.clone(),
+            dashboard_guard,
+        ))
+        .with_state(dashboard_state);
+
     let app = health_router
         .merge(provision_router)
+        .merge(dashboard_router)
         .merge(mcp_router)
         .layer(ConcurrencyLimitLayer::new(256))
         .layer(RequestBodyLimitLayer::new(BODY_LIMIT));

@@ -3,6 +3,7 @@ use crate::error::{Error, Result};
 use crate::hub::{Hub, PRESENCE_WINDOW_SECS};
 use crate::token::{generate_token, hash_token, verify};
 use crate::types::{AgentKind, Handle};
+use rand::RngCore;
 use std::collections::BTreeMap;
 
 impl Hub {
@@ -67,11 +68,36 @@ impl Hub {
         self.store
             .with_writer(move |c| {
                 Box::pin(async move {
-                    sqlx::query("UPDATE agents SET token_revoked=? WHERE handle=?")
+                    let n = sqlx::query("UPDATE agents SET token_revoked=? WHERE handle=?")
                         .bind(now)
-                        .bind(h)
+                        .bind(&h)
                         .execute(c)
-                        .await?;
+                        .await?
+                        .rows_affected();
+                    if n == 0 {
+                        return Err(Error::UnknownHandle(h));
+                    }
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    pub async fn ensure_operator(&self) -> Result<()> {
+        let mut hash = vec![0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut hash);
+        let now = self.now_ms();
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO agents(handle, kind, token_hash, created_at, last_seen_at) \
+                         VALUES ('operator','operator',?,?,0)",
+                    )
+                    .bind(hash)
+                    .bind(now)
+                    .execute(c)
+                    .await?;
                     Ok(())
                 })
             })
@@ -208,6 +234,47 @@ mod tests {
         let t2 = hub.rotate_token(&h).await.unwrap();
         assert!(hub.resolve_token(&t1).await.is_err());
         assert_eq!(hub.resolve_token(&t2).await.unwrap().as_str(), "code");
+    }
+
+    #[tokio::test]
+    async fn ensure_operator_is_idempotent_and_unusable() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        hub.ensure_operator().await.unwrap();
+        let (cnt, kind, hash1): (i64, String, Vec<u8>) = sqlx::query_as(
+            "SELECT COUNT(*), MAX(kind), MAX(token_hash) FROM agents WHERE handle='operator'",
+        )
+        .fetch_one(hub.store.reader())
+        .await
+        .unwrap();
+        assert_eq!(cnt, 1);
+        assert_eq!(kind, "operator");
+        hub.ensure_operator().await.unwrap();
+        let (cnt2, hash2): (i64, Vec<u8>) =
+            sqlx::query_as("SELECT COUNT(*), MAX(token_hash) FROM agents WHERE handle='operator'")
+                .fetch_one(hub.store.reader())
+                .await
+                .unwrap();
+        assert_eq!(cnt2, 1, "repeat call must not create a second row");
+        assert_eq!(hash1, hash2, "repeat call must not mutate the hash");
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM agents")
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert_eq!(total, 1);
+    }
+
+    #[tokio::test]
+    async fn revoke_and_rotate_missing_handle_return_unknown_handle() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let ghost = Handle::parse("ghost").unwrap();
+        assert!(matches!(
+            hub.revoke_token(&ghost).await,
+            Err(crate::error::Error::UnknownHandle(_))
+        ));
+        assert!(matches!(
+            hub.rotate_token(&ghost).await,
+            Err(crate::error::Error::UnknownHandle(_))
+        ));
     }
 
     #[tokio::test]
