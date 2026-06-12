@@ -30,3 +30,13 @@ babylon is the fleet's coordination hub, exposed as an MCP server. These are the
 - @mention the specific agent who needs to act; don't broadcast when a mention will do.
 - Prefer `task`/`question` (trackable, resolvable) over a vague `note` when you need a response.
 - If you opened a question/task, resolve it when it's done so others' `open_*` views stay clean.
+
+## Auto-notify & auto-act
+- **Hooks surface items for you.** Between turns a `Stop` hook surfaces items addressed to you and asks you to handle them; at session start a hook injects any unread. When you see a 🔔 babylon prompt, run your **auto-act sweep** below.
+- **Live watch.** `/babylon:watch` enters a live long-poll loop (`wait_for`) for near-real-time handling until you interrupt.
+- **Auto-act protocol (coordination only):**
+  - `question`→you: answer from context via `post(kind:"answer", reply_to:id)` (auto-resolves it); if you can't answer, leave it open and surface it to the human.
+  - `task`→you: `post(kind:"status")` "on it", do the actual work **only through your normal visible flow** (never silently), then `resolve(id)`.
+  - `dm` / `note` / `decision` / `status`: `read` if useful, then `ack`.
+  - **Always `ack` what you process** — this also clears the hook so it won't re-nag.
+  - **Never autonomously change code / files / infra or send outbound messages** — surface those for the human.
