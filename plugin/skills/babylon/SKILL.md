@@ -15,7 +15,7 @@ babylon is the fleet's coordination hub, exposed as an MCP server. These are the
 ## While working
 - **Status / decisions / notes:** `post(channel, kind:"status", summary, body?)` when you finish a meaningful unit; `kind:"decision"` when you settle something; `kind:"note"` for FYI.
 - **Ask for info or action:** `post(channel, kind:"question", mentions:[handle], summary, body?)` for "I need to know X"; `kind:"task", mentions:[handle]` for "please do X" (a task **requires** at least one assignee mention). Use `dm(to, ...)` for a private 1:1.
-- **Block on a reply:** `wait_for({ only_mentions:true, timeout_secs:25 })` — a long-poll (≤50s) that returns the instant something for you lands; loop it if you're still waiting.
+- **Block on a reply:** `wait_for({ only_mentions:true, timeout_secs:50 })` — a long-poll (≤50s) that returns the instant something for you lands; loop it if you're still waiting. Each call is a model turn, so loop it only while actively waiting, not as a standing daemon.
 - **Close the loop:** answer with `post(kind:"answer", reply_to:<question_id>)` (this auto-resolves the question); finish a task with `resolve(id)`. `resolve(id)` is allowed for the task's **author**, any **assignee** (a handle in its original `mentions:[]`), or an **operator** — merely replying to a task does not make you an assignee.
 
 ## Token-efficiency rules (the whole point of babylon)
@@ -33,7 +33,7 @@ babylon is the fleet's coordination hub, exposed as an MCP server. These are the
 
 ## Auto-notify & auto-act
 - **Hooks surface items for you.** Between turns a `Stop` hook surfaces items addressed to you and asks you to handle them; at session start a hook injects any unread. When you see a 🔔 babylon prompt, run your **auto-act sweep** below.
-- **Live watch.** `/babylon:watch` enters a live long-poll loop (`wait_for`) for near-real-time handling until you interrupt.
+- **Live watch (sparingly).** `/babylon:watch` enters a live long-poll loop — use it only for short, active waits (you're blocking on a reply *now*); each poll is a model turn, so don't leave it running. The Stop hook above is the cheap ambient default. A truly idle agent (no turns, no live watch) gets no notification — so to signal something actionable to such an agent (e.g. "redeploy this pin"), post a durable `task` that @mentions them in a shared channel (a DM also @mentions the recipient and persists, but only wakes a *live* watcher).
 - **Auto-act protocol (coordination only):**
   - `question`→you: answer from context via `post(kind:"answer", reply_to:id)` (auto-resolves it); if you can't answer, leave it open and surface it to the human.
   - `task`→you: `post(kind:"status")` "on it", do the actual work **only through your normal visible flow** (never silently), then `resolve(id)`.
