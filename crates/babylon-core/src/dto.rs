@@ -92,3 +92,29 @@ pub struct GlobalStats {
     pub channels: i64,
     pub messages: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct MessageFull {
+    pub id: i64,
+    pub channel: String,
+    pub from: String,
+    pub kind: String,
+    pub summary: String,
+    pub body: Option<String>,
+    pub ts: i64,
+    pub reply_to: Option<i64>,
+    pub resolved_at: Option<i64>,
+    pub resolved_by: Option<String>,
+    pub to: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ConversationInfo {
+    pub name: String,
+    pub kind: String,
+    pub topic: String,
+    pub members: Vec<String>,
+    pub message_count: i64,
+    pub last_activity_ts: Option<i64>,
+    pub archived: bool,
+}

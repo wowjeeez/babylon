@@ -43,6 +43,46 @@
       <p class="notice" id="notice" hidden></p>
 
       <div class="grid">
+        <section class="tablet span-2 conv" aria-labelledby="h-conv">
+          <h2 class="carved" id="h-conv">Conversations</h2>
+          <div class="conv-shell">
+            <aside class="conv-aside" aria-label="Conversation list">
+              <ul class="conv-list" id="conv-list"></ul>
+            </aside>
+            <div class="conv-pane">
+              <div class="conv-pane-head">
+                <span class="conv-pane-title" id="conv-pane-title">Select a conversation</span>
+                <span class="conv-pane-sub" id="conv-pane-sub"></span>
+              </div>
+              <div class="conv-thread" id="conv-thread" aria-live="polite">
+                <p class="conv-blank" id="conv-blank">Pick a tablet from the left to read its thread.</p>
+              </div>
+              <form class="conv-composer" id="conv-composer" autocomplete="off" hidden>
+                <p class="conv-composer-note" id="conv-composer-note" hidden></p>
+                <div class="conv-composer-row">
+                  <label class="conv-kind">kind
+                    <select id="conv-kind">
+                      <option value="note">note</option>
+                      <option value="status">status</option>
+                      <option value="decision">decision</option>
+                      <option value="question">question</option>
+                      <option value="answer">answer</option>
+                      <option value="task">task</option>
+                    </select>
+                  </label>
+                  <label class="conv-mentions">mentions<input type="text" id="conv-mentions" placeholder="alice, bob" /></label>
+                </div>
+                <label class="conv-summary">summary<input type="text" id="conv-summary" required /></label>
+                <label class="conv-body">body<textarea id="conv-body" rows="2"></textarea></label>
+                <div class="conv-composer-foot">
+                  <p class="conv-error" id="conv-error" hidden></p>
+                  <button type="submit" class="seal seal-lapis seal-small">Send as @operator</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </section>
+
         <section class="tablet span-2" aria-labelledby="h-agents">
           <h2 class="carved" id="h-agents">Agents</h2>
           <p class="hint">presence shown as online &le;90s</p>

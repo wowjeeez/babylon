@@ -1,7 +1,8 @@
 use crate::config::Config;
 use crate::dashboard::{
-    DashboardState, archive_channel, create_channel, dashboard_css, dashboard_guard, dashboard_js,
-    dashboard_page, overview, post_message, tokens_mint, tokens_revoke, tokens_rotate,
+    DashboardState, archive_channel, conversations, create_channel, dashboard_css, dashboard_guard,
+    dashboard_js, dashboard_page, history, overview, post_message, tokens_mint, tokens_revoke,
+    tokens_rotate,
 };
 use crate::health::{healthz, readyz};
 use crate::middleware::{AuthState, auth};
@@ -82,6 +83,8 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
         .route("/dashboard/app.js", get(dashboard_js))
         .route("/dashboard/app.css", get(dashboard_css))
         .route("/api/overview", get(overview))
+        .route("/api/conversations", get(conversations))
+        .route("/api/history", get(history))
         .route("/api/tokens/mint", post(tokens_mint))
         .route("/api/tokens/rotate", post(tokens_rotate))
         .route("/api/tokens/revoke", post(tokens_revoke))

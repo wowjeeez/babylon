@@ -363,10 +363,255 @@
     });
   }
 
+  var conv = {
+    open: null,
+    oldestId: null,
+    newestId: null,
+    timer: null,
+    seen: {}
+  };
+
+  var KIND_CLASS = {
+    task: "k-task",
+    decision: "k-decision",
+    question: "k-question",
+    answer: "k-answer"
+  };
+
+  function dmLabel(c) {
+    var parts = c.members && c.members.length
+      ? c.members.slice()
+      : c.name.slice(3).split("+");
+    if (parts.length >= 2) return parts[0] + " ↔ " + parts[1];
+    return c.name.slice(3) || c.name;
+  }
+
+  function convLabel(c) {
+    return c.name.indexOf("dm:") === 0 ? dmLabel(c) : c.name;
+  }
+
+  function renderConvList(list) {
+    var ul = document.getElementById("conv-list");
+    clear(ul);
+    if (!list.length) {
+      ul.appendChild(el("li", { text: "no conversations", cls: "feed-empty" }));
+      return;
+    }
+    list.forEach(function (c) {
+      var isDm = c.name.indexOf("dm:") === 0;
+      var li = el("li");
+      var btn = el("button", {
+        cls: "conv-item" + (isDm ? " dm" : "") + (c.archived ? " archived" : "") + (conv.open === c.name ? " active" : ""),
+        attrs: { type: "button" }
+      });
+      var top = el("div", { cls: "conv-item-top" });
+      top.appendChild(el("span", { text: convLabel(c), cls: "conv-item-name" }));
+      top.appendChild(el("span", { text: fmtAge(c.last_activity_ts), cls: "conv-item-age" }));
+      btn.appendChild(top);
+      var meta = el("div", { cls: "conv-item-meta" });
+      meta.appendChild(el("span", { text: String(c.message_count) + " msg", cls: "conv-count" }));
+      if (c.archived) meta.appendChild(el("span", { text: "archived", cls: "conv-item-flag" }));
+      else meta.appendChild(el("span", { text: isDm ? "direct" : c.kind, cls: "conv-item-flag" }));
+      btn.appendChild(meta);
+      btn.addEventListener("click", function () { openConversation(c); });
+      li.appendChild(btn);
+      ul.appendChild(li);
+    });
+  }
+
+  async function loadConversations() {
+    try {
+      var data = await api("/api/conversations", "GET");
+      renderConvList(data.conversations || []);
+    } catch (e) {
+      notice("Failed to load conversations: " + e.message, true);
+    }
+  }
+
+  function bubble(m) {
+    var mine = m.from === "operator" || m.from === "owner";
+    var node = el("div", { cls: "bubble" + (mine ? " mine" : "") });
+    var meta = el("div", { cls: "bubble-meta" });
+    meta.appendChild(el("span", { text: "@" + m.from, cls: "bubble-from" }));
+    meta.appendChild(el("span", { text: m.kind, cls: "kind-tag " + (KIND_CLASS[m.kind] || "") }));
+    meta.appendChild(el("span", { text: fmtAge(m.ts), cls: "bubble-time" }));
+    node.appendChild(meta);
+    node.appendChild(el("div", { text: m.summary, cls: "bubble-summary" }));
+    if (m.body) node.appendChild(el("div", { text: m.body, cls: "bubble-body" }));
+    if (m.to && m.to.length) {
+      node.appendChild(el("div", { text: "→ " + m.to.join(", "), cls: "bubble-to" }));
+    }
+    if (m.resolved_at) {
+      var by = m.resolved_by ? " by @" + m.resolved_by : "";
+      node.appendChild(el("div", { text: "resolved" + by, cls: "bubble-resolved" }));
+    }
+    return node;
+  }
+
+  function olderControl() {
+    var btn = el("button", { text: "load older", cls: "conv-older", attrs: { type: "button" } });
+    btn.addEventListener("click", loadOlder);
+    return btn;
+  }
+
+  function trackBounds(messages) {
+    messages.forEach(function (m) {
+      conv.seen[m.id] = true;
+      if (conv.oldestId == null || m.id < conv.oldestId) conv.oldestId = m.id;
+      if (conv.newestId == null || m.id > conv.newestId) conv.newestId = m.id;
+    });
+  }
+
+  function channelQuery(name, before, limit) {
+    var q = "/api/history?channel=" + encodeURIComponent(name) + "&limit=" + limit;
+    if (before != null) q += "&before=" + before;
+    return q;
+  }
+
+  async function loadOlder() {
+    if (!conv.open || conv.oldestId == null) return;
+    var thread = document.getElementById("conv-thread");
+    try {
+      var data = await api(channelQuery(conv.open, conv.oldestId, 50), "GET");
+      var messages = data.messages || [];
+      if (!messages.length) return;
+      var anchor = thread.querySelector(".conv-older");
+      var prevHeight = thread.scrollHeight;
+      var frag = document.createDocumentFragment();
+      messages.forEach(function (m) { frag.appendChild(bubble(m)); });
+      if (anchor) thread.insertBefore(frag, anchor.nextSibling);
+      else thread.insertBefore(frag, thread.firstChild);
+      trackBounds(messages);
+      if (messages.length >= 50 && !thread.querySelector(".conv-older")) {
+        thread.insertBefore(olderControl(), thread.firstChild);
+      }
+      thread.scrollTop = thread.scrollHeight - prevHeight;
+    } catch (e) {
+      notice("Failed to load older messages: " + e.message, true);
+    }
+  }
+
+  function renderThread(messages) {
+    var thread = document.getElementById("conv-thread");
+    clear(thread);
+    if (messages.length >= 50) thread.appendChild(olderControl());
+    messages.forEach(function (m) { thread.appendChild(bubble(m)); });
+    if (!messages.length) {
+      thread.appendChild(el("p", { text: "no messages yet — be the first.", cls: "conv-blank" }));
+    }
+    thread.scrollTop = thread.scrollHeight;
+  }
+
+  async function pollOpen() {
+    if (!conv.open) return;
+    try {
+      var data = await api(channelQuery(conv.open, null, 50), "GET");
+      var fresh = (data.messages || []).filter(function (m) { return !conv.seen[m.id]; });
+      if (!fresh.length) return;
+      var thread = document.getElementById("conv-thread");
+      var atBottom = thread.scrollHeight - thread.scrollTop - thread.clientHeight < 40;
+      fresh.forEach(function (m) { thread.appendChild(bubble(m)); });
+      trackBounds(fresh);
+      if (atBottom) thread.scrollTop = thread.scrollHeight;
+    } catch (e) {
+      void e;
+    }
+  }
+
+  function startPoll() {
+    stopPoll();
+    conv.timer = setInterval(pollOpen, 4000);
+  }
+
+  function stopPoll() {
+    if (conv.timer) {
+      clearInterval(conv.timer);
+      conv.timer = null;
+    }
+  }
+
+  function highlightActive() {
+    var items = document.querySelectorAll(".conv-item");
+    Array.prototype.forEach.call(items, function (it) { it.classList.remove("active"); });
+  }
+
+  async function openConversation(c) {
+    stopPoll();
+    conv.open = c.name;
+    conv.oldestId = null;
+    conv.newestId = null;
+    conv.seen = {};
+    highlightActive();
+    document.getElementById("conv-pane-title").textContent = convLabel(c);
+    document.getElementById("conv-pane-sub").textContent = c.archived ? "archived" : (c.topic || "");
+    var composer = document.getElementById("conv-composer");
+    composer.hidden = false;
+    var isDm = c.name.indexOf("dm:") === 0;
+    var noteEl = document.getElementById("conv-composer-note");
+    noteEl.hidden = !isDm;
+    if (isDm) noteEl.textContent = "Posting here adds @operator as a participant in this DM.";
+    document.getElementById("conv-error").hidden = true;
+    var thread = document.getElementById("conv-thread");
+    clear(thread);
+    thread.appendChild(el("p", { text: "loading…", cls: "conv-blank" }));
+    await loadConversations();
+    try {
+      var data = await api(channelQuery(c.name, null, 50), "GET");
+      var messages = data.messages || [];
+      renderThread(messages);
+      trackBounds(messages);
+      startPoll();
+    } catch (e) {
+      clear(thread);
+      thread.appendChild(el("p", { text: "Failed to load thread: " + e.message, cls: "conv-blank" }));
+    }
+  }
+
+  function wireComposer() {
+    var form = document.getElementById("conv-composer");
+    form.addEventListener("submit", async function (ev) {
+      ev.preventDefault();
+      var errEl = document.getElementById("conv-error");
+      errEl.hidden = true;
+      if (!conv.open) return;
+      var kind = document.getElementById("conv-kind").value;
+      var summary = document.getElementById("conv-summary").value.trim();
+      var bodyRaw = document.getElementById("conv-body").value.trim();
+      var mentions = document.getElementById("conv-mentions").value
+        .split(",")
+        .map(function (s) { return s.trim(); })
+        .filter(function (s) { return s.length; });
+      var btn = form.querySelector('button[type="submit"]');
+      try {
+        if (!summary) throw new Error("A summary is required.");
+        if (kind === "task" && !mentions.length) {
+          throw new Error("A task requires at least one mention (assignee).");
+        }
+        if (btn) btn.disabled = true;
+        var payload = { channel: conv.open, kind: kind, summary: summary, mentions: mentions };
+        if (bodyRaw) payload.body = bodyRaw;
+        await api("/api/messages", "POST", payload);
+        document.getElementById("conv-summary").value = "";
+        document.getElementById("conv-body").value = "";
+        document.getElementById("conv-mentions").value = "";
+        await pollOpen();
+        var thread = document.getElementById("conv-thread");
+        thread.scrollTop = thread.scrollHeight;
+      } catch (e) {
+        errEl.textContent = e.message;
+        errEl.hidden = false;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+  }
+
   function init() {
     document.getElementById("owner-login").textContent = "owner";
     bindTokenReveal();
     wireForms();
+    wireComposer();
+    loadConversations();
     refresh();
     setInterval(refresh, 30000);
   }

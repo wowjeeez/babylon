@@ -1,6 +1,6 @@
 use axum::Json;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
@@ -292,6 +292,52 @@ pub async fn overview(State(state): State<DashboardState>) -> Result<Response, S
     Ok(no_store(Json(resp).into_response()))
 }
 
+pub async fn conversations(State(state): State<DashboardState>) -> Result<Response, StatusCode> {
+    let conversations = state
+        .hub
+        .conversations()
+        .await
+        .map_err(|e| err_status(&e))?;
+    Ok(no_store(
+        Json(json!({ "conversations": conversations })).into_response(),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct HistoryQuery {
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub before: Option<i64>,
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+const DEFAULT_HISTORY_LIMIT: i64 = 50;
+const MAX_HISTORY_LIMIT: i64 = 200;
+
+pub async fn history(
+    State(state): State<DashboardState>,
+    Query(q): Query<HistoryQuery>,
+) -> Result<Response, StatusCode> {
+    let channel = q
+        .channel
+        .filter(|c| !c.is_empty())
+        .ok_or(StatusCode::BAD_REQUEST)?;
+    let limit = q
+        .limit
+        .filter(|l| *l > 0)
+        .unwrap_or(DEFAULT_HISTORY_LIMIT)
+        .min(MAX_HISTORY_LIMIT);
+    let messages = state
+        .hub
+        .channel_history(&channel, q.before, limit)
+        .await
+        .map_err(|e| err_status(&e))?;
+    Ok(no_store(
+        Json(json!({ "messages": messages })).into_response(),
+    ))
+}
+
 #[derive(Deserialize)]
 pub struct MintRequest {
     pub handle: String,
@@ -450,9 +496,6 @@ pub async fn post_message(
     State(state): State<DashboardState>,
     Json(body): Json<PostMessageRequest>,
 ) -> Result<Response, StatusCode> {
-    if body.channel.starts_with("dm:") {
-        return Err(StatusCode::BAD_REQUEST);
-    }
     if !VALID_KINDS.contains(&body.kind.as_str()) {
         return Err(StatusCode::BAD_REQUEST);
     }
