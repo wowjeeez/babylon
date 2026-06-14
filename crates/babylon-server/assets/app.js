@@ -53,7 +53,7 @@
   function fmtAge(ts) {
     if (!ts) return "never";
     var now = Math.floor(Date.now() / 1000);
-    var d = now - ts;
+    var d = now - Math.floor(ts / 1000);
     if (d < 0) d = 0;
     if (d < 60) return d + "s ago";
     if (d < 3600) return Math.floor(d / 60) + "m ago";
