@@ -203,7 +203,8 @@ fn err_status(e: &CoreError) -> StatusCode {
         | CoreError::NotSubscribed(_)
         | CoreError::BadIssueRef(_)
         | CoreError::BadStatus(_)
-        | CoreError::IssueCycle => StatusCode::BAD_REQUEST,
+        | CoreError::IssueCycle
+        | CoreError::EmptyUpdate => StatusCode::BAD_REQUEST,
         CoreError::Db(inner) => {
             tracing::error!(error = %inner, "dashboard database error");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -590,5 +591,6 @@ mod tests {
             StatusCode::BAD_REQUEST
         );
         assert_eq!(err_status(&CoreError::IssueCycle), StatusCode::BAD_REQUEST);
+        assert_eq!(err_status(&CoreError::EmptyUpdate), StatusCode::BAD_REQUEST);
     }
 }

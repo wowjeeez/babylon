@@ -7,10 +7,18 @@ use sqlx::Connection;
 
 const MAX_TITLE: usize = 1024;
 const MAX_BODY: usize = 256 * 1024;
+const MAX_TEMPLATE_NAME: usize = 128;
+
+pub(crate) struct IssueLoc {
+    pub msg_id: i64,
+    pub channel_id: i64,
+    pub number: i64,
+    pub prefix: String,
+}
 
 impl Hub {
     #[allow(clippy::similar_names)]
-    pub(crate) async fn resolve_issue_ref(&self, raw: &str) -> Result<(i64, i64, i64, String)> {
+    pub(crate) async fn resolve_issue_ref(&self, raw: &str) -> Result<IssueLoc> {
         let (prefix, number) = crate::types::parse_issue_ref(raw)?;
         let row: Option<(i64, i64, i64)> = sqlx::query_as(
             "SELECT i.message_id, i.channel_id, i.number \
@@ -21,8 +29,52 @@ impl Hub {
         .bind(number)
         .fetch_optional(self.store.reader())
         .await?;
-        let (msg_id, cid, num) = row.ok_or_else(|| Error::UnknownIssue(raw.to_string()))?;
-        Ok((msg_id, cid, num, prefix))
+        let (msg_id, channel_id, number) =
+            row.ok_or_else(|| Error::UnknownIssue(raw.to_string()))?;
+        Ok(IssueLoc {
+            msg_id,
+            channel_id,
+            number,
+            prefix,
+        })
+    }
+
+    async fn open_children(&self, parent_msg_id: i64) -> Result<i64> {
+        Ok(sqlx::query_scalar(
+            "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
+        )
+        .bind(parent_msg_id)
+        .fetch_one(self.store.reader())
+        .await?)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn issue_info(
+        &self,
+        msg_id: i64,
+        number: i64,
+        prefix: Option<&str>,
+        title: String,
+        status: String,
+        parent_ref: Option<String>,
+        ts: i64,
+    ) -> Result<crate::dto::IssueInfo> {
+        Ok(crate::dto::IssueInfo {
+            reference: crate::types::issue_ref(prefix.unwrap_or_default(), number),
+            title,
+            status,
+            assignee: self.load_mentions(msg_id).await?,
+            parent_ref,
+            open_children: self.open_children(msg_id).await?,
+            ts,
+        })
+    }
+
+    async fn opt_channel_id(&self, channel: Option<&str>) -> Result<Option<i64>> {
+        match channel {
+            Some(ch) => Ok(Some(self.channel_id(ch).await?)),
+            None => Ok(None),
+        }
     }
 
     pub(crate) async fn issue_ref_for(&self, msg_id: i64) -> Result<Option<String>> {
@@ -33,7 +85,7 @@ impl Hub {
         .bind(msg_id)
         .fetch_optional(self.store.reader())
         .await?;
-        Ok(row.and_then(|(p, n)| p.map(|p| format!("#{p}-{n}"))))
+        Ok(row.and_then(|(p, n)| p.map(|p| crate::types::issue_ref(&p, n))))
     }
 
     #[allow(clippy::items_after_statements)]
@@ -45,11 +97,12 @@ impl Hub {
         status: Option<&str>,
         parent: Option<&str>,
     ) -> Result<Vec<crate::dto::IssueInfo>> {
-        if let Some(st) = status {
-            crate::types::IssueStatus::parse(st)?;
-        }
+        let parsed_status = match status {
+            Some(st) => Some(crate::types::IssueStatus::parse(st)?),
+            None => None,
+        };
         let parent_id = match parent {
-            Some(p) => Some(self.resolve_issue_ref(p).await?.0),
+            Some(p) => Some(self.resolve_issue_ref(p).await?.msg_id),
             None => None,
         };
 
@@ -62,7 +115,7 @@ impl Hub {
         if channel.is_some() {
             sql.push_str(" AND c.name=?");
         }
-        match status {
+        match parsed_status {
             Some(_) => sql.push_str(" AND i.status=?"),
             None => sql.push_str(" AND i.status<>'closed'"),
         }
@@ -82,8 +135,8 @@ impl Hub {
         if let Some(ch) = channel {
             q = q.bind(ch.to_string());
         }
-        if let Some(st) = status {
-            q = q.bind(st.to_string());
+        if let Some(parsed) = parsed_status {
+            q = q.bind(parsed.as_str());
         }
         if let Some(pid) = parent_id {
             q = q.bind(pid);
@@ -98,39 +151,32 @@ impl Hub {
             if !self.can_see(by, cid, &ckind).await? {
                 continue;
             }
-            let assignee = self.load_mentions(mid).await?;
-            let open_children: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
-            )
-            .bind(mid)
-            .fetch_one(self.store.reader())
-            .await?;
             let parent_ref = match parent_pid {
                 Some(pp) => self.issue_ref_for(pp).await?,
                 None => None,
             };
-            out.push(crate::dto::IssueInfo {
-                reference: format!("#{}-{number}", prefix.unwrap_or_default()),
-                title: summary,
-                status: st,
-                assignee,
-                parent_ref,
-                open_children,
-                ts,
-            });
+            out.push(
+                self.issue_info(mid, number, prefix.as_deref(), summary, st, parent_ref, ts)
+                    .await?,
+            );
         }
         Ok(out)
     }
 
     #[allow(clippy::items_after_statements)]
     pub async fn get_issue(&self, by: &Handle, ref_str: &str) -> Result<crate::dto::IssueDetail> {
-        let (msg_id, cid, number, prefix) = self.resolve_issue_ref(ref_str).await?;
+        let IssueLoc {
+            msg_id,
+            channel_id,
+            number,
+            prefix,
+        } = self.resolve_issue_ref(ref_str).await?;
         let (ckind, cname): (String, String) =
             sqlx::query_as("SELECT kind, name FROM channels WHERE id=?")
-                .bind(cid)
+                .bind(channel_id)
                 .fetch_one(self.store.reader())
                 .await?;
-        if !self.can_see(by, cid, &ckind).await? {
+        if !self.can_see(by, channel_id, &ckind).await? {
             return Err(Error::UnknownIssue(ref_str.to_string()));
         }
         let (summary, body, status, parent_pid, ts): (String, Option<String>, String, Option<i64>, i64) =
@@ -146,12 +192,7 @@ impl Hub {
             Some(pp) => self.issue_ref_for(pp).await?,
             None => None,
         };
-        let open_children: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
-        )
-        .bind(msg_id)
-        .fetch_one(self.store.reader())
-        .await?;
+        let open_children = self.open_children(msg_id).await?;
 
         type ChildRow = (i64, i64, Option<String>, String, String, i64);
         let child_rows: Vec<ChildRow> = sqlx::query_as(
@@ -164,26 +205,22 @@ impl Hub {
         .await?;
         let mut children = Vec::new();
         for (cmid, cnum, cprefix, csum, cstatus, cts) in child_rows {
-            let cassignee = self.load_mentions(cmid).await?;
-            let coc: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
-            )
-            .bind(cmid)
-            .fetch_one(self.store.reader())
-            .await?;
-            children.push(crate::dto::IssueInfo {
-                reference: format!("#{}-{cnum}", cprefix.unwrap_or_default()),
-                title: csum,
-                status: cstatus,
-                assignee: cassignee,
-                parent_ref: Some(format!("#{prefix}-{number}")),
-                open_children: coc,
-                ts: cts,
-            });
+            children.push(
+                self.issue_info(
+                    cmid,
+                    cnum,
+                    cprefix.as_deref(),
+                    csum,
+                    cstatus,
+                    Some(crate::types::issue_ref(&prefix, number)),
+                    cts,
+                )
+                .await?,
+            );
         }
 
         Ok(crate::dto::IssueDetail {
-            reference: format!("#{prefix}-{number}"),
+            reference: crate::types::issue_ref(&prefix, number),
             channel: cname,
             title: summary,
             body,
@@ -218,7 +255,7 @@ impl Hub {
             None => None,
         };
         let parent_msg_id = match parent {
-            Some(p) => Some(self.resolve_issue_ref(p).await?.0),
+            Some(p) => Some(self.resolve_issue_ref(p).await?.msg_id),
             None => None,
         };
 
@@ -299,7 +336,7 @@ impl Hub {
             self.waiters.wake(h);
         }
         Ok(FiledIssue {
-            reference: format!("#{eff_prefix}-{number}"),
+            reference: crate::types::issue_ref(&eff_prefix, number),
             id: msg_id,
             number,
         })
@@ -326,9 +363,14 @@ impl Hub {
             && title.is_none()
             && body.is_none()
         {
-            return Err(Error::TooLarge("update needs at least one field".into()));
+            return Err(Error::EmptyUpdate);
         }
-        let (msg_id, cid, num, prefix) = self.resolve_issue_ref(ref_str).await?;
+        let IssueLoc {
+            msg_id,
+            channel_id: cid,
+            number: num,
+            prefix,
+        } = self.resolve_issue_ref(ref_str).await?;
         let ckind: String = sqlx::query_scalar("SELECT kind FROM channels WHERE id=?")
             .bind(cid)
             .fetch_one(self.store.reader())
@@ -371,7 +413,7 @@ impl Hub {
 
         let new_parent = match parent {
             Some(p) => {
-                let pid = self.resolve_issue_ref(p).await?.0;
+                let pid = self.resolve_issue_ref(p).await?.msg_id;
                 self.assert_no_cycle(msg_id, pid).await?;
                 Some(pid)
             }
@@ -409,17 +451,17 @@ impl Hub {
         }
 
         if let Some(t) = title {
-            self.set_message_field(msg_id, "summary", t).await?;
+            self.set_summary(msg_id, t).await?;
         }
         if let Some(b) = body {
-            self.set_message_field(msg_id, "body", b).await?;
+            self.set_body(msg_id, b).await?;
         }
 
         let status_out: String = sqlx::query_scalar("SELECT status FROM issues WHERE message_id=?")
             .bind(msg_id)
             .fetch_one(self.store.reader())
             .await?;
-        Ok((format!("#{prefix}-{num}"), status_out))
+        Ok((crate::types::issue_ref(&prefix, num), status_out))
     }
 
     async fn set_issue_status(&self, msg_id: i64, status: &str) -> Result<()> {
@@ -514,16 +556,32 @@ impl Hub {
             .await
     }
 
-    async fn set_message_field(&self, msg_id: i64, field: &str, value: &str) -> Result<()> {
-        let sql = match field {
-            "summary" => "UPDATE messages SET summary=? WHERE id=?",
-            _ => "UPDATE messages SET body=? WHERE id=?",
-        };
+    async fn set_summary(&self, msg_id: i64, value: &str) -> Result<()> {
         let v = value.to_string();
         self.store
             .with_writer(move |c| {
                 Box::pin(async move {
-                    sqlx::query(sql).bind(v).bind(msg_id).execute(c).await?;
+                    sqlx::query("UPDATE messages SET summary=? WHERE id=?")
+                        .bind(v)
+                        .bind(msg_id)
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    async fn set_body(&self, msg_id: i64, value: &str) -> Result<()> {
+        let v = value.to_string();
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE messages SET body=? WHERE id=?")
+                        .bind(v)
+                        .bind(msg_id)
+                        .execute(c)
+                        .await?;
                     Ok(())
                 })
             })
@@ -546,16 +604,13 @@ impl Hub {
         channel: Option<&str>,
         title: Option<&str>,
     ) -> Result<()> {
-        if name.is_empty() || name.len() > 128 {
+        if name.is_empty() || name.len() > MAX_TEMPLATE_NAME {
             return Err(Error::TooLarge("name".into()));
         }
         if body.is_empty() || body.len() > MAX_BODY {
             return Err(Error::TooLarge("body".into()));
         }
-        let cid = match channel {
-            Some(ch) => Some(self.channel_id(ch).await?),
-            None => None,
-        };
+        let cid = self.opt_channel_id(channel).await?;
         let (n, b, t, who, now) = (
             name.to_string(),
             body.to_string(),
@@ -612,10 +667,7 @@ impl Hub {
         _by: &Handle,
         channel: Option<&str>,
     ) -> Result<Vec<crate::dto::TemplateInfo>> {
-        let cid = match channel {
-            Some(ch) => Some(self.channel_id(ch).await?),
-            None => None,
-        };
+        let cid = self.opt_channel_id(channel).await?;
         type Row = (Option<i64>, String, Option<String>, String, String, i64);
         let rows: Vec<Row> = match cid {
             Some(id) => {
@@ -812,10 +864,10 @@ mod tests {
         hub.file_issue(&code, "pmv2", "x", None, None, None, None)
             .await
             .unwrap();
-        assert!(hub
+        let err = hub
             .update_issue(&code, "#pmv2-1", None, None, None, None, None)
-            .await
-            .is_err());
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::EmptyUpdate)));
     }
 
     #[tokio::test]

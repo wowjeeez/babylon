@@ -42,6 +42,8 @@ pub enum Error {
     BadStatus(String),
     #[error("issue cannot be its own ancestor")]
     IssueCycle,
+    #[error("update needs at least one field")]
+    EmptyUpdate,
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
 }

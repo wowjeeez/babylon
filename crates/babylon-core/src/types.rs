@@ -93,6 +93,11 @@ impl IssueStatus {
     }
 }
 
+#[must_use]
+pub fn issue_ref(prefix: &str, number: i64) -> String {
+    format!("#{prefix}-{number}")
+}
+
 pub fn parse_issue_ref(raw: &str) -> Result<(String, i64)> {
     let s = raw.trim();
     let s = s.strip_prefix('#').unwrap_or(s);
