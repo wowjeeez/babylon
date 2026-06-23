@@ -184,8 +184,12 @@ fn no_store(mut resp: Response) -> Response {
 
 fn err_status(e: &CoreError) -> StatusCode {
     match e {
-        CoreError::UnknownHandle(_) | CoreError::UnknownChannel(_) => StatusCode::NOT_FOUND,
-        CoreError::HandleExists(_) | CoreError::ChannelExists(_) => StatusCode::CONFLICT,
+        CoreError::UnknownHandle(_)
+        | CoreError::UnknownChannel(_)
+        | CoreError::UnknownIssue(_) => StatusCode::NOT_FOUND,
+        CoreError::HandleExists(_)
+        | CoreError::ChannelExists(_)
+        | CoreError::DuplicatePrefix(_) => StatusCode::CONFLICT,
         CoreError::NotAuthorized(_)
         | CoreError::NotAuthorizedToResolve(_)
         | CoreError::Unauthorized
@@ -196,7 +200,10 @@ fn err_status(e: &CoreError) -> StatusCode {
         | CoreError::BadReplyTarget(_)
         | CoreError::BadResolveTarget(_)
         | CoreError::NotAMember(_)
-        | CoreError::NotSubscribed(_) => StatusCode::BAD_REQUEST,
+        | CoreError::NotSubscribed(_)
+        | CoreError::BadIssueRef(_)
+        | CoreError::BadStatus(_)
+        | CoreError::IssueCycle => StatusCode::BAD_REQUEST,
         CoreError::Db(inner) => {
             tracing::error!(error = %inner, "dashboard database error");
             StatusCode::INTERNAL_SERVER_ERROR
@@ -527,7 +534,7 @@ pub async fn post_message(
 
 #[cfg(test)]
 mod tests {
-    use super::{ct_eq, host_allowed, host_only, is_loopback};
+    use super::{CoreError, StatusCode, ct_eq, err_status, host_allowed, host_only, is_loopback};
 
     #[test]
     fn host_only_strips_scheme_and_port() {
@@ -562,5 +569,26 @@ mod tests {
         assert!(!ct_eq("abc", "abd"));
         assert!(!ct_eq("abc", "abcd"));
         assert!(!ct_eq("", "x"));
+    }
+
+    #[test]
+    fn issue_errors_map_to_status() {
+        assert_eq!(
+            err_status(&CoreError::UnknownIssue("x".into())),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            err_status(&CoreError::DuplicatePrefix("x".into())),
+            StatusCode::CONFLICT
+        );
+        assert_eq!(
+            err_status(&CoreError::BadIssueRef("x".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            err_status(&CoreError::BadStatus("x".into())),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(err_status(&CoreError::IssueCycle), StatusCode::BAD_REQUEST);
     }
 }
