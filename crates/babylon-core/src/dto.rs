@@ -118,3 +118,11 @@ pub struct ConversationInfo {
     pub last_activity_ts: Option<i64>,
     pub archived: bool,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct FiledIssue {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub id: i64,
+    pub number: i64,
+}
