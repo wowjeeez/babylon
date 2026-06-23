@@ -3,6 +3,98 @@ use crate::hub::Hub;
 use crate::types::{Handle, MessageKind};
 use sqlx::Connection;
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn insert_message_tx(
+    tx: &mut sqlx::SqliteConnection,
+    cid: i64,
+    ckind: &str,
+    author: &str,
+    kind: &str,
+    summary: &str,
+    body: Option<&str>,
+    reply_to: Option<i64>,
+    mentions: &[String],
+    now: i64,
+) -> Result<i64> {
+    let mut kept: Vec<String> = Vec::new();
+    for m in mentions {
+        let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
+            .bind(m)
+            .fetch_optional(&mut *tx)
+            .await?;
+        if exists.is_none() {
+            return Err(Error::UnknownHandle(m.clone()));
+        }
+        if ckind == "dm" {
+            let member: Option<i64> = sqlx::query_scalar(
+                "SELECT 1 FROM channel_members WHERE channel_id=? AND handle=?",
+            )
+            .bind(cid)
+            .bind(m)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if member.is_none() {
+                continue;
+            }
+        }
+        kept.push(m.clone());
+    }
+
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO messages(channel_id, author, kind, summary, body, reply_to, created_at) \
+         VALUES (?,?,?,?,?,?,?) RETURNING id",
+    )
+    .bind(cid)
+    .bind(author)
+    .bind(kind)
+    .bind(summary)
+    .bind(body)
+    .bind(reply_to)
+    .bind(now)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+         VALUES (?,?,?,1) ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
+    )
+    .bind(author)
+    .bind(cid)
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    for m in &kept {
+        sqlx::query("INSERT INTO message_mentions(message_id, handle) VALUES (?,?)")
+            .bind(id)
+            .bind(m)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+             VALUES (?,?,?,1) ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
+        )
+        .bind(m)
+        .bind(cid)
+        .bind(id - 1)
+        .execute(&mut *tx)
+        .await?;
+    }
+    Ok(id)
+}
+
+pub(crate) async fn wake_set(c: &mut sqlx::SqliteConnection, cid: i64) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT s.handle FROM subscriptions s JOIN channels c ON c.id = s.channel_id \
+         WHERE c.id = ? AND s.active = 1 \
+         AND (c.kind <> 'dm' OR EXISTS (\
+           SELECT 1 FROM channel_members cm WHERE cm.channel_id = c.id AND cm.handle = s.handle))",
+    )
+    .bind(cid)
+    .fetch_all(c)
+    .await?)
+}
+
 impl Hub {
     #[allow(clippy::too_many_lines)]
     pub async fn dm(
@@ -183,8 +275,7 @@ impl Hub {
                             .bind(&chan_s)
                             .fetch_optional(&mut *tx)
                             .await?;
-                    let (cid, ckind) =
-                        chan.ok_or_else(|| Error::UnknownChannel(chan_s.clone()))?;
+                    let (cid, ckind) = chan.ok_or_else(|| Error::UnknownChannel(chan_s.clone()))?;
 
                     if let Some(rt) = reply_to {
                         let rc: Option<i64> =
@@ -197,75 +288,11 @@ impl Hub {
                         }
                     }
 
-                    let mut kept: Vec<String> = Vec::new();
-                    for m in &mhandles {
-                        let exists: Option<i64> =
-                            sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
-                                .bind(m)
-                                .fetch_optional(&mut *tx)
-                                .await?;
-                        if exists.is_none() {
-                            return Err(Error::UnknownHandle(m.clone()));
-                        }
-                        if ckind == "dm" {
-                            let member: Option<i64> = sqlx::query_scalar(
-                                "SELECT 1 FROM channel_members WHERE channel_id=? AND handle=?",
-                            )
-                            .bind(cid)
-                            .bind(m)
-                            .fetch_optional(&mut *tx)
-                            .await?;
-                            if member.is_none() {
-                                continue;
-                            }
-                        }
-                        kept.push(m.clone());
-                    }
-
-                    let id: i64 = sqlx::query_scalar(
-                        "INSERT INTO messages(channel_id, author, kind, summary, body, reply_to, created_at) \
-                         VALUES (?,?,?,?,?,?,?) RETURNING id",
+                    let id = insert_message_tx(
+                        &mut tx, cid, &ckind, &author_s, &kind_s, &summary_s,
+                        body_s.as_deref(), reply_to, &mhandles, now,
                     )
-                    .bind(cid)
-                    .bind(&author_s)
-                    .bind(&kind_s)
-                    .bind(&summary_s)
-                    .bind(&body_s)
-                    .bind(reply_to)
-                    .bind(now)
-                    .fetch_one(&mut *tx)
                     .await?;
-
-                    sqlx::query(
-                        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
-                         VALUES (?,?,?,1) \
-                         ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
-                    )
-                    .bind(&author_s)
-                    .bind(cid)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-
-                    for m in &kept {
-                        sqlx::query(
-                            "INSERT INTO message_mentions(message_id, handle) VALUES (?,?)",
-                        )
-                        .bind(id)
-                        .bind(m)
-                        .execute(&mut *tx)
-                        .await?;
-                        sqlx::query(
-                            "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
-                             VALUES (?,?,?,1) \
-                             ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
-                        )
-                        .bind(m)
-                        .bind(cid)
-                        .bind(id - 1)
-                        .execute(&mut *tx)
-                        .await?;
-                    }
 
                     if k == MessageKind::Answer {
                         if let Some(rt) = reply_to {
@@ -281,20 +308,7 @@ impl Hub {
                         }
                     }
                     tx.commit().await?;
-
-                    let names: Vec<String> = sqlx::query_scalar(
-                        "SELECT s.handle FROM subscriptions s \
-                         JOIN channels c ON c.id = s.channel_id \
-                         WHERE c.id = ? AND s.active = 1 \
-                         AND (c.kind <> 'dm' OR EXISTS (\
-                           SELECT 1 FROM channel_members cm \
-                           WHERE cm.channel_id = c.id AND cm.handle = s.handle\
-                         ))",
-                    )
-                    .bind(cid)
-                    .fetch_all(c)
-                    .await?;
-
+                    let names = wake_set(c, cid).await?;
                     Ok::<(i64, Vec<String>), Error>((id, names))
                 })
             })
