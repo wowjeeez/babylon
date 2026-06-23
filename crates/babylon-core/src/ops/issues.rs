@@ -305,7 +305,11 @@ impl Hub {
         })
     }
 
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity
+    )]
     pub async fn update_issue(
         &self,
         by: &Handle,
@@ -333,8 +337,59 @@ impl Hub {
             return Err(Error::UnknownIssue(ref_str.to_string()));
         }
 
-        if let Some(st) = status {
-            let parsed = crate::types::IssueStatus::parse(st)?;
+        let parsed_status = match status {
+            Some(st) => Some(crate::types::IssueStatus::parse(st)?),
+            None => None,
+        };
+
+        let assignee_h = match assignee {
+            Some(a) => {
+                let ah = Handle::parse(a)?.into_string();
+                let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
+                    .bind(&ah)
+                    .fetch_optional(self.store.reader())
+                    .await?;
+                if exists.is_none() {
+                    return Err(Error::UnknownHandle(ah));
+                }
+                if ckind == "dm" {
+                    let member: Option<i64> = sqlx::query_scalar(
+                        "SELECT 1 FROM channel_members WHERE channel_id=? AND handle=?",
+                    )
+                    .bind(cid)
+                    .bind(&ah)
+                    .fetch_optional(self.store.reader())
+                    .await?;
+                    if member.is_none() {
+                        return Err(Error::NotAMember(ah));
+                    }
+                }
+                Some(ah)
+            }
+            None => None,
+        };
+
+        let new_parent = match parent {
+            Some(p) => {
+                let pid = self.resolve_issue_ref(p).await?.0;
+                self.assert_no_cycle(msg_id, pid).await?;
+                Some(pid)
+            }
+            None => None,
+        };
+
+        if let Some(t) = title {
+            if t.is_empty() || t.len() > MAX_TITLE {
+                return Err(Error::TooLarge("title".into()));
+            }
+        }
+        if let Some(b) = body {
+            if b.len() > MAX_BODY {
+                return Err(Error::TooLarge("body".into()));
+            }
+        }
+
+        if let Some(parsed) = parsed_status {
             if parsed == crate::types::IssueStatus::Closed {
                 self.resolve(by, msg_id, None).await?;
             } else {
@@ -344,47 +399,19 @@ impl Hub {
             self.set_issue_status(msg_id, parsed.as_str()).await?;
         }
 
-        if let Some(a) = assignee {
-            let ah = Handle::parse(a)?.into_string();
-            let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
-                .bind(&ah)
-                .fetch_optional(self.store.reader())
-                .await?;
-            if exists.is_none() {
-                return Err(Error::UnknownHandle(ah));
-            }
-            if ckind == "dm" {
-                let member: Option<i64> = sqlx::query_scalar(
-                    "SELECT 1 FROM channel_members WHERE channel_id=? AND handle=?",
-                )
-                .bind(cid)
-                .bind(&ah)
-                .fetch_optional(self.store.reader())
-                .await?;
-                if member.is_none() {
-                    return Err(Error::NotAMember(ah));
-                }
-            }
+        if let Some(ah) = assignee_h {
             self.reassign_issue(msg_id, cid, &ah).await?;
             self.waiters.wake(&ah);
         }
 
-        if let Some(p) = parent {
-            let new_parent = self.resolve_issue_ref(p).await?.0;
-            self.assert_no_cycle(msg_id, new_parent).await?;
-            self.set_issue_parent(msg_id, Some(new_parent)).await?;
+        if let Some(pid) = new_parent {
+            self.set_issue_parent(msg_id, Some(pid)).await?;
         }
 
         if let Some(t) = title {
-            if t.is_empty() || t.len() > MAX_TITLE {
-                return Err(Error::TooLarge("title".into()));
-            }
             self.set_message_field(msg_id, "summary", t).await?;
         }
         if let Some(b) = body {
-            if b.len() > MAX_BODY {
-                return Err(Error::TooLarge("body".into()));
-            }
             self.set_message_field(msg_id, "body", b).await?;
         }
 
@@ -455,9 +482,10 @@ impl Hub {
     }
 
     async fn assert_no_cycle(&self, msg_id: i64, new_parent: i64) -> Result<()> {
+        let mut visited = std::collections::HashSet::new();
         let mut cur = Some(new_parent);
         while let Some(p) = cur {
-            if p == msg_id {
+            if p == msg_id || !visited.insert(p) {
                 return Err(Error::IssueCycle);
             }
             cur = sqlx::query_scalar::<_, Option<i64>>(
@@ -909,5 +937,94 @@ mod tests {
 
         let only_global = hub.list_templates(&code, None).await.unwrap();
         assert_eq!(only_global.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn update_no_partial_commit_when_later_field_invalid() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        let i = hub
+            .file_issue(&code, "pmv2", "x", None, Some("deploy"), None, None)
+            .await
+            .unwrap();
+
+        let err = hub
+            .update_issue(&code, "#pmv2-1", Some("closed"), None, None, Some(""), None)
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::TooLarge(_))));
+
+        let ra: Option<i64> = sqlx::query_scalar("SELECT resolved_at FROM messages WHERE id=?")
+            .bind(i.id)
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert!(ra.is_none());
+        let st: String = sqlx::query_scalar("SELECT status FROM issues WHERE message_id=?")
+            .bind(i.id)
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert_eq!(st, "open");
+
+        let err2 = hub
+            .update_issue(
+                &code,
+                "#pmv2-1",
+                Some("in_progress"),
+                Some("ghost_unknown"),
+                None,
+                None,
+                None,
+            )
+            .await;
+        assert!(matches!(err2, Err(crate::error::Error::UnknownHandle(_))));
+        let st2: String = sqlx::query_scalar("SELECT status FROM issues WHERE message_id=?")
+            .bind(i.id)
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert_eq!(st2, "open");
+    }
+
+    #[tokio::test]
+    async fn reparent_cycle_walk_terminates_on_corrupt_data() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.file_issue(&code, "pmv2", "one", None, None, None, None)
+            .await
+            .unwrap();
+        let b = hub
+            .file_issue(&code, "pmv2", "two", None, None, None, None)
+            .await
+            .unwrap();
+        let cc = hub
+            .file_issue(&code, "pmv2", "three", None, None, None, None)
+            .await
+            .unwrap();
+
+        let (bid, cid) = (b.id, cc.id);
+        hub.store
+            .with_writer(move |conn| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE issues SET parent_id=? WHERE message_id=?")
+                        .bind(cid)
+                        .bind(bid)
+                        .execute(&mut *conn)
+                        .await?;
+                    sqlx::query("UPDATE issues SET parent_id=? WHERE message_id=?")
+                        .bind(bid)
+                        .bind(cid)
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+            .unwrap();
+
+        let err = hub
+            .update_issue(&code, "#pmv2-1", None, None, Some("#pmv2-2"), None, None)
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::IssueCycle)));
     }
 }
