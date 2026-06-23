@@ -1,15 +1,17 @@
 pub mod params;
 
 use babylon_core::dto::{
-    AgentInfo, CatchUp, ChannelInfo, MsgFull, MsgSummary, RegisterResult, ResolveResult,
+    AgentInfo, CatchUp, ChannelInfo, FiledIssue, IssueDetail, IssueInfo, MsgFull, MsgSummary,
+    RegisterResult, ResolveResult, TemplateInfo,
 };
 use babylon_core::error::Error as CoreError;
 use babylon_core::hub::Hub;
 use babylon_core::types::Handle;
 use params::{
-    AckParams, CatchUpParams, ChannelNameParams, CreateChannelParams, DmParams, ListChannelsParams,
-    OpenQuestionsParams, OpenTasksParams, PostParams, ReadParams, RegisterParams, ResolveParams,
-    WaitForParams,
+    AckParams, CatchUpParams, ChannelNameParams, CreateChannelParams, DmParams, FileIssueParams,
+    GetIssueParams, ListChannelsParams, ListIssuesParams, ListTemplatesParams, OpenQuestionsParams,
+    OpenTasksParams, PostParams, ReadParams, RegisterParams, ResolveParams, SaveTemplateParams,
+    UpdateIssueParams, WaitForParams,
 };
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::{Json, Parameters};
@@ -76,6 +78,28 @@ pub struct AckResult {
 #[derive(Clone, Serialize, JsonSchema)]
 pub struct OkResult {
     pub ok: bool,
+}
+
+#[derive(Clone, Serialize, JsonSchema)]
+pub struct IssueListResult {
+    pub issues: Vec<IssueInfo>,
+}
+
+#[derive(Clone, Serialize, JsonSchema)]
+pub struct UpdateIssueResult {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub status: String,
+}
+
+#[derive(Clone, Serialize, JsonSchema)]
+pub struct TemplateListResult {
+    pub templates: Vec<TemplateInfo>,
+}
+
+#[derive(Clone, Serialize, JsonSchema)]
+pub struct SaveTemplateResult {
+    pub saved: bool,
 }
 
 #[derive(Clone)]
@@ -362,7 +386,140 @@ impl BabylonServer {
         let agents = self.hub.list_agents().await.map_err(map_err)?;
         Ok(Json(AgentList { agents }))
     }
+
+    #[tool(
+        description = "File an issue into a channel; returns its #prefix-N ref. assignee optional (channel-owned if omitted); parent #ref makes it a subissue; prefix sets the channel's issue prefix on first use."
+    )]
+    async fn file_issue(
+        &self,
+        Parameters(p): Parameters<FileIssueParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<FiledIssue>, McpError> {
+        let h = Self::caller(&ctx)?;
+        let r = self
+            .hub
+            .file_issue(
+                &h,
+                &p.channel,
+                &p.title,
+                p.body.as_deref(),
+                p.assignee.as_deref(),
+                p.parent.as_deref(),
+                p.prefix.as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Json(r))
+    }
+
+    #[tool(
+        description = "Update an issue by #ref: status (open|in_progress|blocked|closed), assignee (replaces), parent #ref, title, body. At least one field."
+    )]
+    async fn update_issue(
+        &self,
+        Parameters(p): Parameters<UpdateIssueParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<UpdateIssueResult>, McpError> {
+        let h = Self::caller(&ctx)?;
+        let (reference, status) = self
+            .hub
+            .update_issue(
+                &h,
+                &p.reference,
+                p.status.as_deref(),
+                p.assignee.as_deref(),
+                p.parent.as_deref(),
+                p.title.as_deref(),
+                p.body.as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Json(UpdateIssueResult { reference, status }))
+    }
+
+    #[tool(
+        description = "List issues (defaults to non-closed). Filter by channel, assignee, status, or parent #ref."
+    )]
+    async fn list_issues(
+        &self,
+        Parameters(p): Parameters<ListIssuesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<IssueListResult>, McpError> {
+        let h = Self::caller(&ctx)?;
+        let issues = self
+            .hub
+            .list_issues(
+                &h,
+                p.channel.as_deref(),
+                p.assignee.as_deref(),
+                p.status.as_deref(),
+                p.parent.as_deref(),
+            )
+            .await
+            .map_err(map_err)?;
+        Ok(Json(IssueListResult { issues }))
+    }
+
+    #[tool(description = "Get one issue by #ref with its full body and immediate subissues.")]
+    async fn get_issue(
+        &self,
+        Parameters(p): Parameters<GetIssueParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<IssueDetail>, McpError> {
+        let h = Self::caller(&ctx)?;
+        let d = self
+            .hub
+            .get_issue(&h, &p.reference)
+            .await
+            .map_err(map_err)?;
+        Ok(Json(d))
+    }
+
+    #[tool(description = "List issue templates for a channel (channel-scoped + fleet-global).")]
+    async fn list_templates(
+        &self,
+        Parameters(p): Parameters<ListTemplatesParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<TemplateListResult>, McpError> {
+        let h = Self::caller(&ctx)?;
+        let templates = self
+            .hub
+            .list_templates(&h, p.channel.as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Json(TemplateListResult { templates }))
+    }
+
+    #[tool(
+        description = "Save (create/update) an issue template. Omit channel for a fleet-global template. Seed improved templates back here."
+    )]
+    async fn save_template(
+        &self,
+        Parameters(p): Parameters<SaveTemplateParams>,
+        ctx: RequestContext<RoleServer>,
+    ) -> Result<Json<SaveTemplateResult>, McpError> {
+        let h = Self::caller(&ctx)?;
+        self.hub
+            .save_template(&h, &p.name, &p.body, p.channel.as_deref(), p.title.as_deref())
+            .await
+            .map_err(map_err)?;
+        Ok(Json(SaveTemplateResult { saved: true }))
+    }
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for BabylonServer {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    #[allow(clippy::expect_used)]
+    async fn server_constructs_with_all_tool_schemas() {
+        let hub = babylon_core::hub::Hub::new_in_memory()
+            .await
+            .expect("hub");
+        let _server = BabylonServer::new(hub);
+    }
+}

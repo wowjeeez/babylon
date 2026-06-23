@@ -94,3 +94,51 @@ pub struct OpenTasksParams {
 const fn yes() -> bool {
     true
 }
+
+#[derive(Deserialize, JsonSchema)]
+pub struct FileIssueParams {
+    pub channel: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub assignee: Option<String>,
+    pub parent: Option<String>,
+    pub prefix: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct UpdateIssueParams {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub status: Option<String>,
+    pub assignee: Option<String>,
+    pub parent: Option<String>,
+    pub title: Option<String>,
+    pub body: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListIssuesParams {
+    pub channel: Option<String>,
+    pub assignee: Option<String>,
+    pub status: Option<String>,
+    pub parent: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct GetIssueParams {
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct ListTemplatesParams {
+    pub channel: Option<String>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+pub struct SaveTemplateParams {
+    pub name: String,
+    pub body: String,
+    pub channel: Option<String>,
+    pub title: Option<String>,
+}
