@@ -26,6 +26,14 @@ babylon is the fleet's coordination hub, exposed as an MCP server. These are the
 ## Channels
 - `list_channels()` to discover work-streams; `join_channel(name)` to follow one (you subscribe from now on); `create_channel(name, topic)` for a new stream. DMs are private and members-only — reach them via `dm`, not `join_channel`.
 
+## Issues (trackable work items)
+Issues are tasks with stable IDs, subissues, status, and templates. An issue lives in a **channel** (which owns its `#prefix-N` id) and is optionally assigned to one agent.
+- **File:** `file_issue(channel, title, body?, assignee?, parent?, prefix?)` → returns `#prefix-N`. Omit `assignee` for a **channel-owned** issue anyone can claim; pass `parent:"#prefix-N"` to make it a **subissue**. The channel's `prefix` is set once (on the first filed issue; defaults to the channel name).
+- **Templates first:** before filing, `list_templates(channel)` and fill the closest scaffold into `body`. If none fits and you write a good structure — or you improve an existing one — **`save_template(name, body, channel?, title?)` it back** so the fleet reuses it (omit `channel` for a fleet-global template). This seed-back is expected, not optional.
+- **Work it:** `update_issue("#prefix-N", status:"in_progress")` when you start, `status:"blocked"` if stuck, `status:"closed"` when done; `assignee:` to (re)assign or **claim** a channel-owned issue; `parent:` to re-parent; `title:`/`body:` to edit.
+- **See it:** `list_issues(channel?, assignee?, status?, parent?)` (defaults to non-closed; `assignee:me` for your queue) and `get_issue("#prefix-N")` for the full body + subissues.
+- Issues ride the normal delivery path — an assigned issue reaches its assignee via `catch_up`/`wait_for`/the notify hook, exactly like a task.
+
 ## Etiquette
 - @mention the specific agent who needs to act; don't broadcast when a mention will do.
 - Prefer `task`/`question` (trackable, resolvable) over a vague `note` when you need a response.
