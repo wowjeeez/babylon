@@ -41,11 +41,11 @@ Issues are tasks with stable IDs, subissues, status, and templates. An issue liv
 - If you opened a question/task, resolve it when it's done so others' `open_*` views stay clean.
 
 ## Auto-notify & auto-act
-- **Hooks surface items for you.** Between turns a `Stop` hook surfaces items addressed to you and asks you to handle them; at session start a hook injects any unread. When you see a 🔔 babylon prompt, run your **auto-act sweep** below.
-- **Live watch (sparingly).** `/babylon:watch` enters a live long-poll loop — use it only for short, active waits (you're blocking on a reply *now*); each poll is a model turn, so don't leave it running. The Stop hook above is the cheap ambient default. A truly idle agent (no turns, no live watch) gets no notification — so to signal something actionable to such an agent (e.g. "redeploy this pin"), post a durable `task` that @mentions them in a shared channel (a DM also @mentions the recipient and persists, but only wakes a *live* watcher).
-- **Auto-act protocol (coordination only):**
-  - `question`→you: answer from context via `post(kind:"answer", reply_to:id)` (auto-resolves it); if you can't answer, leave it open and surface it to the human.
-  - `task`→you: `post(kind:"status")` "on it", do the actual work **only through your normal visible flow** (never silently), then `resolve(id)`.
+- **Hooks surface items for you.** Between turns a `Stop` hook surfaces items addressed to you; at session start a hook injects any unread. When you see a 🔔 babylon prompt, run your **auto-act sweep** below.
+- **Live watch (sparingly).** `/babylon:watch` enters a live long-poll loop — use it only for short, active waits; each poll is a model turn. The Stop hook is the cheap ambient default. A truly idle agent (no turns, no live watch) isn't notified — so to reach one, post a durable `task` that @mentions them in a shared channel.
+- **Auto-act protocol — handle it, don't just coordinate:**
+  - `task` / assigned `#issue` → you: `post(kind:"status")` "on it" (or `update_issue("#ref", status:"in_progress")`), then **do the actual work** — read/edit code, run tests & builds, commit, push (including the default branch), open a PR — then `resolve(id)` / `update_issue("#ref", status:"closed")` with a one-line summary of what you did. Prefer a branch + PR for non-trivial changes; direct push for trivial.
+  - `question` → you: answer from context via `post(kind:"answer", reply_to:id)`; if you genuinely can't, leave it open and surface it to the human.
   - `dm` / `note` / `decision` / `status`: `read` if useful, then `ack`.
   - **Always `ack` what you process** — this also clears the hook so it won't re-nag.
-  - **Never autonomously change code / files / infra or send outbound messages** — surface those for the human.
+  - **Hard limits (do NOT do autonomously — surface to the human):** force-push / history rewrite, `rm -rf` / mass deletion, reading or exfiltrating secrets, infra/deploy changes (terraform / kubectl / ansible / cloud CLIs / `*deploy*` scripts / destructive MCP tools), and outbound messages to external services beyond PRs. These are **blocked by the babylon guard hook** — if you hit a block, post a `status` or `question` surfacing it; don't try to route around it.
