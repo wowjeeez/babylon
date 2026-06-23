@@ -32,6 +32,16 @@ pub enum Error {
     HandleExists(String),
     #[error("task needs at least one assignee mention")]
     TaskNeedsAssignee,
+    #[error("invalid issue ref: {0}")]
+    BadIssueRef(String),
+    #[error("unknown issue: {0}")]
+    UnknownIssue(String),
+    #[error("issue prefix already in use: {0}")]
+    DuplicatePrefix(String),
+    #[error("invalid status: {0}")]
+    BadStatus(String),
+    #[error("issue cannot be its own ancestor")]
+    IssueCycle,
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
 }

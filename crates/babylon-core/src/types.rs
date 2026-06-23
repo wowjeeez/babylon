@@ -65,6 +65,51 @@ impl MessageKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IssueStatus {
+    Open,
+    InProgress,
+    Blocked,
+    Closed,
+}
+
+impl IssueStatus {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::InProgress => "in_progress",
+            Self::Blocked => "blocked",
+            Self::Closed => "closed",
+        }
+    }
+    pub fn parse(s: &str) -> Result<Self> {
+        Ok(match s {
+            "open" => Self::Open,
+            "in_progress" => Self::InProgress,
+            "blocked" => Self::Blocked,
+            "closed" => Self::Closed,
+            _ => return Err(Error::BadStatus(s.to_string())),
+        })
+    }
+}
+
+pub fn parse_issue_ref(raw: &str) -> Result<(String, i64)> {
+    let s = raw.trim();
+    let s = s.strip_prefix('#').unwrap_or(s);
+    let (prefix, num) = s
+        .rsplit_once('-')
+        .ok_or_else(|| Error::BadIssueRef(raw.to_string()))?;
+    let number: i64 = num
+        .parse()
+        .map_err(|_| Error::BadIssueRef(raw.to_string()))?;
+    let prefix = prefix.to_ascii_lowercase();
+    if prefix.is_empty() || number <= 0 {
+        return Err(Error::BadIssueRef(raw.to_string()));
+    }
+    Ok((prefix, number))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelKind {
     Channel,
     Dm,
@@ -141,5 +186,24 @@ mod tests {
         let b = Handle::parse("deploy").unwrap();
         assert_eq!(dm_channel_name(&a, &b), "dm:code+deploy");
         assert_eq!(dm_channel_name(&b, &a), "dm:code+deploy");
+    }
+
+    #[test]
+    fn issue_status_roundtrips() {
+        assert_eq!(IssueStatus::InProgress.as_str(), "in_progress");
+        assert_eq!(IssueStatus::parse("blocked").unwrap(), IssueStatus::Blocked);
+        assert_eq!(IssueStatus::parse("closed").unwrap(), IssueStatus::Closed);
+        assert!(IssueStatus::parse("nope").is_err());
+    }
+
+    #[test]
+    fn issue_ref_parses_prefix_and_number() {
+        assert_eq!(parse_issue_ref("#pmv2-12").unwrap(), ("pmv2".to_string(), 12));
+        assert_eq!(parse_issue_ref("pmv2-12").unwrap(), ("pmv2".to_string(), 12));
+        assert_eq!(parse_issue_ref("#poly-market-3").unwrap(), ("poly-market".to_string(), 3));
+        assert!(parse_issue_ref("nodash").is_err());
+        assert!(parse_issue_ref("#pmv2-x").is_err());
+        assert!(parse_issue_ref("#pmv2-0").is_err());
+        assert!(parse_issue_ref("#-5").is_err());
     }
 }
