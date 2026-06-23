@@ -25,6 +25,177 @@ impl Hub {
         Ok((msg_id, cid, num, prefix))
     }
 
+    pub(crate) async fn issue_ref_for(&self, msg_id: i64) -> Result<Option<String>> {
+        let row: Option<(Option<String>, i64)> = sqlx::query_as(
+            "SELECT c.issue_prefix, i.number FROM issues i \
+             JOIN channels c ON c.id=i.channel_id WHERE i.message_id=?",
+        )
+        .bind(msg_id)
+        .fetch_optional(self.store.reader())
+        .await?;
+        Ok(row.and_then(|(p, n)| p.map(|p| format!("#{p}-{n}"))))
+    }
+
+    #[allow(clippy::items_after_statements)]
+    pub async fn list_issues(
+        &self,
+        by: &Handle,
+        channel: Option<&str>,
+        assignee: Option<&str>,
+        status: Option<&str>,
+        parent: Option<&str>,
+    ) -> Result<Vec<crate::dto::IssueInfo>> {
+        if let Some(st) = status {
+            crate::types::IssueStatus::parse(st)?;
+        }
+        let parent_id = match parent {
+            Some(p) => Some(self.resolve_issue_ref(p).await?.0),
+            None => None,
+        };
+
+        let mut sql = String::from(
+            "SELECT i.message_id, i.number, c.issue_prefix, c.id, c.kind, \
+             m.summary, i.status, i.parent_id, m.created_at \
+             FROM issues i JOIN channels c ON c.id=i.channel_id \
+             JOIN messages m ON m.id=i.message_id WHERE 1=1",
+        );
+        if channel.is_some() {
+            sql.push_str(" AND c.name=?");
+        }
+        match status {
+            Some(_) => sql.push_str(" AND i.status=?"),
+            None => sql.push_str(" AND i.status<>'closed'"),
+        }
+        if parent_id.is_some() {
+            sql.push_str(" AND i.parent_id=?");
+        }
+        if assignee.is_some() {
+            sql.push_str(
+                " AND EXISTS(SELECT 1 FROM message_mentions x \
+                 WHERE x.message_id=i.message_id AND x.handle=?)",
+            );
+        }
+        sql.push_str(" ORDER BY c.issue_prefix, i.number");
+
+        type Row = (i64, i64, Option<String>, i64, String, String, String, Option<i64>, i64);
+        let mut q = sqlx::query_as::<_, Row>(&sql);
+        if let Some(ch) = channel {
+            q = q.bind(ch.to_string());
+        }
+        if let Some(st) = status {
+            q = q.bind(st.to_string());
+        }
+        if let Some(pid) = parent_id {
+            q = q.bind(pid);
+        }
+        if let Some(a) = assignee {
+            q = q.bind(a.to_string());
+        }
+        let rows = q.fetch_all(self.store.reader()).await?;
+
+        let mut out = Vec::new();
+        for (mid, number, prefix, cid, ckind, summary, st, parent_pid, ts) in rows {
+            if !self.can_see(by, cid, &ckind).await? {
+                continue;
+            }
+            let assignee = self.load_mentions(mid).await?;
+            let open_children: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
+            )
+            .bind(mid)
+            .fetch_one(self.store.reader())
+            .await?;
+            let parent_ref = match parent_pid {
+                Some(pp) => self.issue_ref_for(pp).await?,
+                None => None,
+            };
+            out.push(crate::dto::IssueInfo {
+                reference: format!("#{}-{number}", prefix.unwrap_or_default()),
+                title: summary,
+                status: st,
+                assignee,
+                parent_ref,
+                open_children,
+                ts,
+            });
+        }
+        Ok(out)
+    }
+
+    #[allow(clippy::items_after_statements)]
+    pub async fn get_issue(&self, by: &Handle, ref_str: &str) -> Result<crate::dto::IssueDetail> {
+        let (msg_id, cid, number, prefix) = self.resolve_issue_ref(ref_str).await?;
+        let (ckind, cname): (String, String) =
+            sqlx::query_as("SELECT kind, name FROM channels WHERE id=?")
+                .bind(cid)
+                .fetch_one(self.store.reader())
+                .await?;
+        if !self.can_see(by, cid, &ckind).await? {
+            return Err(Error::UnknownIssue(ref_str.to_string()));
+        }
+        let (summary, body, status, parent_pid, ts): (String, Option<String>, String, Option<i64>, i64) =
+            sqlx::query_as(
+                "SELECT m.summary, m.body, i.status, i.parent_id, m.created_at \
+                 FROM issues i JOIN messages m ON m.id=i.message_id WHERE i.message_id=?",
+            )
+            .bind(msg_id)
+            .fetch_one(self.store.reader())
+            .await?;
+        let assignee = self.load_mentions(msg_id).await?;
+        let parent_ref = match parent_pid {
+            Some(pp) => self.issue_ref_for(pp).await?,
+            None => None,
+        };
+        let open_children: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
+        )
+        .bind(msg_id)
+        .fetch_one(self.store.reader())
+        .await?;
+
+        type ChildRow = (i64, i64, Option<String>, String, String, i64);
+        let child_rows: Vec<ChildRow> = sqlx::query_as(
+            "SELECT i.message_id, i.number, c.issue_prefix, m.summary, i.status, m.created_at \
+             FROM issues i JOIN channels c ON c.id=i.channel_id \
+             JOIN messages m ON m.id=i.message_id WHERE i.parent_id=? ORDER BY i.number",
+        )
+        .bind(msg_id)
+        .fetch_all(self.store.reader())
+        .await?;
+        let mut children = Vec::new();
+        for (cmid, cnum, cprefix, csum, cstatus, cts) in child_rows {
+            let cassignee = self.load_mentions(cmid).await?;
+            let coc: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM issues WHERE parent_id=? AND status<>'closed'",
+            )
+            .bind(cmid)
+            .fetch_one(self.store.reader())
+            .await?;
+            children.push(crate::dto::IssueInfo {
+                reference: format!("#{}-{cnum}", cprefix.unwrap_or_default()),
+                title: csum,
+                status: cstatus,
+                assignee: cassignee,
+                parent_ref: Some(format!("#{prefix}-{number}")),
+                open_children: coc,
+                ts: cts,
+            });
+        }
+
+        Ok(crate::dto::IssueDetail {
+            reference: format!("#{prefix}-{number}"),
+            channel: cname,
+            title: summary,
+            body,
+            status,
+            assignee,
+            parent_ref,
+            open_children,
+            ts,
+            children,
+        })
+    }
+
     #[allow(clippy::too_many_arguments, clippy::single_match_else)]
     pub async fn file_issue(
         &self,
@@ -480,5 +651,56 @@ mod tests {
             .update_issue(&code, "#pmv2-1", None, None, None, None, None)
             .await
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn list_filters_and_counts_open_children() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.file_issue(&code, "pmv2", "parent", None, Some("deploy"), None, None)
+            .await
+            .unwrap();
+        hub.file_issue(&code, "pmv2", "child", None, None, None, None)
+            .await
+            .unwrap();
+        hub.update_issue(&code, "#pmv2-2", None, None, Some("#pmv2-1"), None, None)
+            .await
+            .unwrap();
+
+        let open = hub.list_issues(&code, Some("pmv2"), None, None, None).await.unwrap();
+        assert_eq!(open.len(), 2);
+        let parent = open.iter().find(|i| i.reference == "#pmv2-1").unwrap();
+        assert_eq!(parent.open_children, 1);
+
+        let mine = hub.list_issues(&code, None, Some("deploy"), None, None).await.unwrap();
+        assert!(mine.iter().any(|i| i.reference == "#pmv2-1"));
+
+        hub.update_issue(&code, "#pmv2-2", Some("closed"), None, None, None, None)
+            .await
+            .unwrap();
+        let still_open = hub.list_issues(&code, Some("pmv2"), None, None, None).await.unwrap();
+        assert_eq!(still_open.len(), 1);
+        let closed = hub.list_issues(&code, Some("pmv2"), None, Some("closed"), None).await.unwrap();
+        assert_eq!(closed.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn get_issue_returns_body_and_children() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.file_issue(&code, "pmv2", "parent", Some("details"), None, None, None)
+            .await
+            .unwrap();
+        hub.file_issue(&code, "pmv2", "child", None, None, None, None)
+            .await
+            .unwrap();
+        hub.update_issue(&code, "#pmv2-2", None, None, Some("#pmv2-1"), None, None)
+            .await
+            .unwrap();
+        let d = hub.get_issue(&code, "#pmv2-1").await.unwrap();
+        assert_eq!(d.body.as_deref(), Some("details"));
+        assert_eq!(d.children.len(), 1);
+        assert_eq!(d.children[0].reference, "#pmv2-2");
+        assert_eq!(d.children[0].parent_ref.as_deref(), Some("#pmv2-1"));
     }
 }

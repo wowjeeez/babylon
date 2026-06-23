@@ -126,3 +126,34 @@ pub struct FiledIssue {
     pub id: i64,
     pub number: i64,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueInfo {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub title: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignee: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_ref: Option<String>,
+    pub open_children: i64,
+    pub ts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct IssueDetail {
+    #[serde(rename = "ref")]
+    pub reference: String,
+    pub channel: String,
+    pub title: String,
+    pub body: Option<String>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignee: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_ref: Option<String>,
+    pub open_children: i64,
+    pub ts: i64,
+    pub children: Vec<IssueInfo>,
+}
