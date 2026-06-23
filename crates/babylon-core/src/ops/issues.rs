@@ -330,10 +330,7 @@ impl Hub {
             .fetch_one(self.store.reader())
             .await?;
         if !self.can_see(by, cid, &ckind).await? {
-            return Err(Error::NotAuthorized(format!(
-                "{} cannot edit {ref_str}",
-                by.as_str()
-            )));
+            return Err(Error::UnknownIssue(ref_str.to_string()));
         }
 
         if let Some(st) = status {
@@ -355,6 +352,18 @@ impl Hub {
                 .await?;
             if exists.is_none() {
                 return Err(Error::UnknownHandle(ah));
+            }
+            if ckind == "dm" {
+                let member: Option<i64> = sqlx::query_scalar(
+                    "SELECT 1 FROM channel_members WHERE channel_id=? AND handle=?",
+                )
+                .bind(cid)
+                .bind(&ah)
+                .fetch_optional(self.store.reader())
+                .await?;
+                if member.is_none() {
+                    return Err(Error::NotAMember(ah));
+                }
             }
             self.reassign_issue(msg_id, cid, &ah).await?;
             self.waiters.wake(&ah);
@@ -830,6 +839,50 @@ mod tests {
         assert_eq!(d.children.len(), 1);
         assert_eq!(d.children[0].reference, "#pmv2-2");
         assert_eq!(d.children[0].parent_ref.as_deref(), Some("#pmv2-1"));
+    }
+
+    #[tokio::test]
+    async fn dm_reassign_requires_membership() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let code = Handle::parse("code").unwrap();
+        let deploy = Handle::parse("deploy").unwrap();
+        let mallory = Handle::parse("mallory").unwrap();
+        for h in [&code, &deploy, &mallory] {
+            hub.mint_token(h, AgentKind::Agent).await.unwrap();
+        }
+        hub.dm(&code, &deploy, "note", "hi", None, None).await.unwrap();
+        let i = hub
+            .file_issue(&code, "dm:code+deploy", "t", None, Some("deploy"), None, Some("dmx"))
+            .await
+            .unwrap();
+        hub.update_issue(&code, "#dmx-1", None, Some("deploy"), None, None, None)
+            .await
+            .unwrap();
+        let m = hub.load_mentions(i.id).await.unwrap();
+        assert_eq!(m, vec!["deploy".to_string()]);
+        let err = hub
+            .update_issue(&code, "#dmx-1", None, Some("mallory"), None, None, None)
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::NotAMember(_))));
+    }
+
+    #[tokio::test]
+    async fn dm_update_hides_existence_from_outsider() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let code = Handle::parse("code").unwrap();
+        let deploy = Handle::parse("deploy").unwrap();
+        let mallory = Handle::parse("mallory").unwrap();
+        for h in [&code, &deploy, &mallory] {
+            hub.mint_token(h, AgentKind::Agent).await.unwrap();
+        }
+        hub.dm(&code, &deploy, "note", "hi", None, None).await.unwrap();
+        hub.file_issue(&code, "dm:code+deploy", "t", None, Some("deploy"), None, Some("dmx"))
+            .await
+            .unwrap();
+        let err = hub
+            .update_issue(&mallory, "#dmx-1", Some("in_progress"), None, None, None, None)
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::UnknownIssue(_))));
     }
 
     #[tokio::test]
