@@ -6,6 +6,9 @@ use crate::types::{AgentKind, Handle};
 use rand::RngCore;
 use std::collections::BTreeMap;
 
+const NEWS_CHANNEL: &str = "babylon-news";
+const NEWS_TOPIC: &str = "Fleet patch notes — new babylon features, changes, and conventions. You're auto-subscribed; catch up here on what's new.";
+
 impl Hub {
     pub async fn mint_token(&self, handle: &Handle, kind: AgentKind) -> Result<String> {
         let token = generate_token();
@@ -132,8 +135,30 @@ impl Hub {
                     )
                     .bind(role2)
                     .bind(now)
-                    .bind(h)
-                    .execute(c)
+                    .bind(&h)
+                    .execute(&mut *c)
+                    .await?;
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO channels(name, topic, kind, created_by, created_at) \
+                         VALUES (?, ?, 'channel', ?, ?)",
+                    )
+                    .bind(NEWS_CHANNEL)
+                    .bind(NEWS_TOPIC)
+                    .bind(&h)
+                    .bind(now)
+                    .execute(&mut *c)
+                    .await?;
+                    let news_id: i64 = sqlx::query_scalar("SELECT id FROM channels WHERE name=?")
+                        .bind(NEWS_CHANNEL)
+                        .fetch_one(&mut *c)
+                        .await?;
+                    sqlx::query(
+                        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+                         VALUES (?, ?, 0, 1) ON CONFLICT(handle, channel_id) DO NOTHING",
+                    )
+                    .bind(&h)
+                    .bind(news_id)
+                    .execute(&mut *c)
                     .await?;
                     Ok(())
                 })
@@ -288,5 +313,49 @@ mod tests {
         let me = agents.iter().find(|a| a.handle == "code").unwrap();
         assert!(me.online);
         assert_eq!(me.role.as_deref(), Some("app-side"));
+    }
+
+    #[tokio::test]
+    async fn register_auto_subscribes_to_news_and_catches_up_from_start() {
+        let hub = Hub::new_in_memory().await.unwrap();
+        let a = Handle::parse("a").unwrap();
+        let b = Handle::parse("b").unwrap();
+        hub.mint_token(&a, AgentKind::Agent).await.unwrap();
+        hub.mint_token(&b, AgentKind::Agent).await.unwrap();
+        hub.register(&a, None).await.unwrap();
+        hub.register(&b, None).await.unwrap();
+        let id = hub
+            .post(&b, "babylon-news", "note", "issue tracker shipped", None, &[], None)
+            .await
+            .unwrap();
+        let cu = hub
+            .catch_up(&a, Some(&["babylon-news".into()]), false, 50)
+            .await
+            .unwrap();
+        assert!(
+            cu.messages.iter().any(|m| m.id == id),
+            "subscribed agent sees the news note"
+        );
+        hub.ack(&a, "babylon-news", id).await.unwrap();
+        hub.register(&a, None).await.unwrap();
+        let cu2 = hub
+            .catch_up(&a, Some(&["babylon-news".into()]), false, 50)
+            .await
+            .unwrap();
+        assert!(
+            cu2.messages.is_empty(),
+            "re-register must NOT reset an existing reader's cursor"
+        );
+        let c = Handle::parse("c").unwrap();
+        hub.mint_token(&c, AgentKind::Agent).await.unwrap();
+        hub.register(&c, None).await.unwrap();
+        let cu_c = hub
+            .catch_up(&c, Some(&["babylon-news".into()]), false, 50)
+            .await
+            .unwrap();
+        assert!(
+            cu_c.messages.iter().any(|m| m.id == id),
+            "late registrant catches up on prior news (cursor 0)"
+        );
     }
 }
