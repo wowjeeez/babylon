@@ -133,6 +133,194 @@ impl Hub {
             number,
         })
     }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    pub async fn update_issue(
+        &self,
+        by: &Handle,
+        ref_str: &str,
+        status: Option<&str>,
+        assignee: Option<&str>,
+        parent: Option<&str>,
+        title: Option<&str>,
+        body: Option<&str>,
+    ) -> Result<(String, String)> {
+        if status.is_none()
+            && assignee.is_none()
+            && parent.is_none()
+            && title.is_none()
+            && body.is_none()
+        {
+            return Err(Error::TooLarge("update needs at least one field".into()));
+        }
+        let (msg_id, cid, num, prefix) = self.resolve_issue_ref(ref_str).await?;
+        let ckind: String = sqlx::query_scalar("SELECT kind FROM channels WHERE id=?")
+            .bind(cid)
+            .fetch_one(self.store.reader())
+            .await?;
+        if !self.can_see(by, cid, &ckind).await? {
+            return Err(Error::NotAuthorized(format!(
+                "{} cannot edit {ref_str}",
+                by.as_str()
+            )));
+        }
+
+        if let Some(st) = status {
+            let parsed = crate::types::IssueStatus::parse(st)?;
+            if parsed == crate::types::IssueStatus::Closed {
+                self.resolve(by, msg_id, None).await?;
+            } else {
+                self.assert_can_resolve(by, msg_id).await?;
+                self.clear_resolved(msg_id).await?;
+            }
+            self.set_issue_status(msg_id, parsed.as_str()).await?;
+        }
+
+        if let Some(a) = assignee {
+            let ah = Handle::parse(a)?.into_string();
+            let exists: Option<i64> = sqlx::query_scalar("SELECT 1 FROM agents WHERE handle=?")
+                .bind(&ah)
+                .fetch_optional(self.store.reader())
+                .await?;
+            if exists.is_none() {
+                return Err(Error::UnknownHandle(ah));
+            }
+            self.reassign_issue(msg_id, cid, &ah).await?;
+            self.waiters.wake(&ah);
+        }
+
+        if let Some(p) = parent {
+            let new_parent = self.resolve_issue_ref(p).await?.0;
+            self.assert_no_cycle(msg_id, new_parent).await?;
+            self.set_issue_parent(msg_id, Some(new_parent)).await?;
+        }
+
+        if let Some(t) = title {
+            if t.is_empty() || t.len() > MAX_TITLE {
+                return Err(Error::TooLarge("title".into()));
+            }
+            self.set_message_field(msg_id, "summary", t).await?;
+        }
+        if let Some(b) = body {
+            if b.len() > MAX_BODY {
+                return Err(Error::TooLarge("body".into()));
+            }
+            self.set_message_field(msg_id, "body", b).await?;
+        }
+
+        let status_out: String = sqlx::query_scalar("SELECT status FROM issues WHERE message_id=?")
+            .bind(msg_id)
+            .fetch_one(self.store.reader())
+            .await?;
+        Ok((format!("#{prefix}-{num}"), status_out))
+    }
+
+    async fn set_issue_status(&self, msg_id: i64, status: &str) -> Result<()> {
+        let s = status.to_string();
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE issues SET status=? WHERE message_id=?")
+                        .bind(s)
+                        .bind(msg_id)
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    async fn clear_resolved(&self, msg_id: i64) -> Result<()> {
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE messages SET resolved_at=NULL, resolved_by=NULL WHERE id=?")
+                        .bind(msg_id)
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    async fn reassign_issue(&self, msg_id: i64, cid: i64, assignee: &str) -> Result<()> {
+        let a = assignee.to_string();
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query("DELETE FROM message_mentions WHERE message_id=?")
+                        .bind(msg_id)
+                        .execute(&mut *c)
+                        .await?;
+                    sqlx::query("INSERT INTO message_mentions(message_id, handle) VALUES (?,?)")
+                        .bind(msg_id)
+                        .bind(&a)
+                        .execute(&mut *c)
+                        .await?;
+                    sqlx::query(
+                        "INSERT INTO subscriptions(handle, channel_id, last_acked_id, active) \
+                         VALUES (?,?,?,1) ON CONFLICT(handle, channel_id) DO UPDATE SET active=1",
+                    )
+                    .bind(&a)
+                    .bind(cid)
+                    .bind(msg_id - 1)
+                    .execute(c)
+                    .await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    async fn assert_no_cycle(&self, msg_id: i64, new_parent: i64) -> Result<()> {
+        let mut cur = Some(new_parent);
+        while let Some(p) = cur {
+            if p == msg_id {
+                return Err(Error::IssueCycle);
+            }
+            cur = sqlx::query_scalar::<_, Option<i64>>(
+                "SELECT parent_id FROM issues WHERE message_id=?",
+            )
+            .bind(p)
+            .fetch_optional(self.store.reader())
+            .await?
+            .flatten();
+        }
+        Ok(())
+    }
+
+    async fn set_issue_parent(&self, msg_id: i64, parent: Option<i64>) -> Result<()> {
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query("UPDATE issues SET parent_id=? WHERE message_id=?")
+                        .bind(parent)
+                        .bind(msg_id)
+                        .execute(c)
+                        .await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    async fn set_message_field(&self, msg_id: i64, field: &str, value: &str) -> Result<()> {
+        let sql = match field {
+            "summary" => "UPDATE messages SET summary=? WHERE id=?",
+            _ => "UPDATE messages SET body=? WHERE id=?",
+        };
+        let v = value.to_string();
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    sqlx::query(sql).bind(v).bind(msg_id).execute(c).await?;
+                    Ok(())
+                })
+            })
+            .await
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +390,95 @@ mod tests {
             .file_issue(&code, "beta", "y", None, None, None, Some("shared"))
             .await;
         assert!(matches!(err, Err(crate::error::Error::DuplicatePrefix(_))));
+    }
+
+    #[tokio::test]
+    async fn close_sets_resolved_then_reopen_clears() {
+        let (hub, code, dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        let i = hub
+            .file_issue(&code, "pmv2", "x", None, Some("deploy"), None, None)
+            .await
+            .unwrap();
+        let (_r, st) = hub
+            .update_issue(&dep, "#pmv2-1", Some("closed"), None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(st, "closed");
+        let ra: Option<i64> = sqlx::query_scalar("SELECT resolved_at FROM messages WHERE id=?")
+            .bind(i.id)
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert!(ra.is_some());
+        let (_r2, st2) = hub
+            .update_issue(&dep, "#pmv2-1", Some("open"), None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(st2, "open");
+        let ra2: Option<i64> = sqlx::query_scalar("SELECT resolved_at FROM messages WHERE id=?")
+            .bind(i.id)
+            .fetch_one(hub.store.reader())
+            .await
+            .unwrap();
+        assert!(ra2.is_none());
+    }
+
+    #[tokio::test]
+    async fn close_authz_rejects_outsider() {
+        let (hub, code, _dep) = two_agents().await;
+        let mallory = Handle::parse("mallory").unwrap();
+        hub.mint_token(&mallory, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.file_issue(&code, "pmv2", "x", None, Some("deploy"), None, None)
+            .await
+            .unwrap();
+        let err = hub
+            .update_issue(&mallory, "#pmv2-1", Some("closed"), None, None, None, None)
+            .await;
+        assert!(matches!(
+            err,
+            Err(crate::error::Error::NotAuthorizedToResolve(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn reassign_replaces_mentions_and_reparent_blocks_cycle() {
+        let (hub, code, _dep) = two_agents().await;
+        let weather = Handle::parse("weather").unwrap();
+        hub.mint_token(&weather, AgentKind::Agent).await.unwrap();
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        let a = hub
+            .file_issue(&code, "pmv2", "parent", None, Some("deploy"), None, None)
+            .await
+            .unwrap();
+        hub.file_issue(&code, "pmv2", "child", None, None, None, None)
+            .await
+            .unwrap();
+        hub.update_issue(&code, "#pmv2-2", None, None, Some("#pmv2-1"), None, None)
+            .await
+            .unwrap();
+        let err = hub
+            .update_issue(&code, "#pmv2-1", None, None, Some("#pmv2-2"), None, None)
+            .await;
+        assert!(matches!(err, Err(crate::error::Error::IssueCycle)));
+        hub.update_issue(&code, "#pmv2-1", None, Some("weather"), None, None, None)
+            .await
+            .unwrap();
+        let m = hub.load_mentions(a.id).await.unwrap();
+        assert_eq!(m, vec!["weather".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn update_with_no_fields_errors() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.file_issue(&code, "pmv2", "x", None, None, None, None)
+            .await
+            .unwrap();
+        assert!(hub
+            .update_issue(&code, "#pmv2-1", None, None, None, None, None)
+            .await
+            .is_err());
     }
 }

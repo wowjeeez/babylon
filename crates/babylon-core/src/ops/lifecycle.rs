@@ -83,6 +83,42 @@ impl Hub {
         }
     }
 
+    pub(crate) async fn assert_can_resolve(&self, by: &Handle, id: i64) -> Result<()> {
+        let row: Option<(i64, String, String, String)> = sqlx::query_as(
+            "SELECT m.channel_id, m.kind, m.author, c.kind \
+             FROM messages m JOIN channels c ON c.id=m.channel_id WHERE m.id=?",
+        )
+        .bind(id)
+        .fetch_optional(self.store.reader())
+        .await?;
+        let (channel_id, kind, author, ckind) = row.ok_or(Error::BadResolveTarget(id))?;
+        if kind != "question" && kind != "task" {
+            return Err(Error::BadResolveTarget(id));
+        }
+        if ckind == "dm" && !self.can_see(by, channel_id, &ckind).await? {
+            return Err(Error::NotAuthorizedToResolve(id));
+        }
+        let is_operator: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT 1 FROM agents WHERE handle=? AND kind='operator'",
+        )
+        .bind(by.as_str())
+        .fetch_optional(self.store.reader())
+        .await?
+        .is_some();
+        let is_assignee: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT 1 FROM message_mentions WHERE message_id=? AND handle=?",
+        )
+        .bind(id)
+        .bind(by.as_str())
+        .fetch_optional(self.store.reader())
+        .await?
+        .is_some();
+        if by.as_str() != author && !is_assignee && !is_operator {
+            return Err(Error::NotAuthorizedToResolve(id));
+        }
+        Ok(())
+    }
+
     pub async fn resolve(&self, by: &Handle, id: i64, note: Option<&str>) -> Result<ResolveResult> {
         #[allow(clippy::type_complexity)]
         let row: Option<(i64, String, String, Option<i64>, Option<String>, String)> =
@@ -93,7 +129,7 @@ impl Hub {
             .bind(id)
             .fetch_optional(self.store.reader())
             .await?;
-        let (channel_id, kind, author, resolved_at, resolved_by, ckind) =
+        let (channel_id, kind, _author, resolved_at, resolved_by, ckind) =
             row.ok_or(Error::BadResolveTarget(id))?;
         if kind != "question" && kind != "task" {
             return Err(Error::BadResolveTarget(id));
@@ -108,23 +144,7 @@ impl Hub {
                 resolved_by: b,
             });
         }
-        let is_operator: bool =
-            sqlx::query_scalar::<_, i64>("SELECT 1 FROM agents WHERE handle=? AND kind='operator'")
-                .bind(by.as_str())
-                .fetch_optional(self.store.reader())
-                .await?
-                .is_some();
-        let is_assignee: bool = sqlx::query_scalar::<_, i64>(
-            "SELECT 1 FROM message_mentions WHERE message_id=? AND handle=?",
-        )
-        .bind(id)
-        .bind(by.as_str())
-        .fetch_optional(self.store.reader())
-        .await?
-        .is_some();
-        if by.as_str() != author && !is_assignee && !is_operator {
-            return Err(Error::NotAuthorizedToResolve(id));
-        }
+        self.assert_can_resolve(by, id).await?;
         let (b, now, _note) = (
             by.as_str().to_string(),
             self.now_ms(),
