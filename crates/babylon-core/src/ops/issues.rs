@@ -492,6 +492,134 @@ impl Hub {
             })
             .await
     }
+
+    pub(crate) async fn channel_id(&self, name: &str) -> Result<i64> {
+        sqlx::query_scalar("SELECT id FROM channels WHERE name=?")
+            .bind(name)
+            .fetch_optional(self.store.reader())
+            .await?
+            .ok_or_else(|| Error::UnknownChannel(name.to_string()))
+    }
+
+    pub async fn save_template(
+        &self,
+        by: &Handle,
+        name: &str,
+        body: &str,
+        channel: Option<&str>,
+        title: Option<&str>,
+    ) -> Result<()> {
+        if name.is_empty() || name.len() > 128 {
+            return Err(Error::TooLarge("name".into()));
+        }
+        if body.is_empty() || body.len() > MAX_BODY {
+            return Err(Error::TooLarge("body".into()));
+        }
+        let cid = match channel {
+            Some(ch) => Some(self.channel_id(ch).await?),
+            None => None,
+        };
+        let (n, b, t, who, now) = (
+            name.to_string(),
+            body.to_string(),
+            title.map(str::to_string),
+            by.as_str().to_string(),
+            self.now_ms(),
+        );
+        self.store
+            .with_writer(move |c| {
+                Box::pin(async move {
+                    let existing: Option<i64> = sqlx::query_scalar(
+                        "SELECT 1 FROM templates WHERE IFNULL(channel_id,0)=IFNULL(?,0) AND name=?",
+                    )
+                    .bind(cid)
+                    .bind(&n)
+                    .fetch_optional(&mut *c)
+                    .await?;
+                    if existing.is_some() {
+                        sqlx::query(
+                            "UPDATE templates SET title=?, body=?, updated_by=?, updated_at=? \
+                             WHERE IFNULL(channel_id,0)=IFNULL(?,0) AND name=?",
+                        )
+                        .bind(&t)
+                        .bind(&b)
+                        .bind(&who)
+                        .bind(now)
+                        .bind(cid)
+                        .bind(&n)
+                        .execute(c)
+                        .await?;
+                    } else {
+                        sqlx::query(
+                            "INSERT INTO templates(channel_id, name, title, body, updated_by, updated_at) \
+                             VALUES (?,?,?,?,?,?)",
+                        )
+                        .bind(cid)
+                        .bind(&n)
+                        .bind(&t)
+                        .bind(&b)
+                        .bind(&who)
+                        .bind(now)
+                        .execute(c)
+                        .await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await
+    }
+
+    #[allow(clippy::items_after_statements)]
+    pub async fn list_templates(
+        &self,
+        _by: &Handle,
+        channel: Option<&str>,
+    ) -> Result<Vec<crate::dto::TemplateInfo>> {
+        let cid = match channel {
+            Some(ch) => Some(self.channel_id(ch).await?),
+            None => None,
+        };
+        type Row = (Option<i64>, String, Option<String>, String, String, i64);
+        let rows: Vec<Row> = match cid {
+            Some(id) => {
+                sqlx::query_as(
+                    "SELECT channel_id, name, title, body, updated_by, updated_at FROM templates \
+                     WHERE channel_id=? OR channel_id IS NULL \
+                     ORDER BY channel_id IS NULL DESC, name",
+                )
+                .bind(id)
+                .fetch_all(self.store.reader())
+                .await?
+            }
+            None => {
+                sqlx::query_as(
+                    "SELECT channel_id, name, title, body, updated_by, updated_at FROM templates \
+                     WHERE channel_id IS NULL ORDER BY name",
+                )
+                .fetch_all(self.store.reader())
+                .await?
+            }
+        };
+        let mut out = Vec::new();
+        for (ch_id, name, title, body, updated_by, updated_at) in rows {
+            let scope = match ch_id {
+                Some(id) => sqlx::query_scalar::<_, String>("SELECT name FROM channels WHERE id=?")
+                    .bind(id)
+                    .fetch_one(self.store.reader())
+                    .await?,
+                None => "global".to_string(),
+            };
+            out.push(crate::dto::TemplateInfo {
+                name,
+                title,
+                body,
+                scope,
+                updated_by,
+                updated_at,
+            });
+        }
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
@@ -702,5 +830,31 @@ mod tests {
         assert_eq!(d.children.len(), 1);
         assert_eq!(d.children[0].reference, "#pmv2-2");
         assert_eq!(d.children[0].parent_ref.as_deref(), Some("#pmv2-1"));
+    }
+
+    #[tokio::test]
+    async fn templates_upsert_and_scope() {
+        let (hub, code, _dep) = two_agents().await;
+        hub.create_channel(&code, "pmv2", "t").await.unwrap();
+        hub.save_template(&code, "bug", "## Repro\n", Some("pmv2"), Some("Bug"))
+            .await
+            .unwrap();
+        hub.save_template(&code, "bug", "## Steps\n", Some("pmv2"), Some("Bug"))
+            .await
+            .unwrap();
+        hub.save_template(&code, "task", "## Goal\n", None, None)
+            .await
+            .unwrap();
+
+        let t = hub.list_templates(&code, Some("pmv2")).await.unwrap();
+        assert_eq!(t.len(), 2);
+        let bug = t.iter().find(|x| x.name == "bug").unwrap();
+        assert_eq!(bug.body, "## Steps\n");
+        assert_eq!(bug.scope, "pmv2");
+        let g = t.iter().find(|x| x.name == "task").unwrap();
+        assert_eq!(g.scope, "global");
+
+        let only_global = hub.list_templates(&code, None).await.unwrap();
+        assert_eq!(only_global.len(), 1);
     }
 }

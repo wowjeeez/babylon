@@ -157,3 +157,13 @@ pub struct IssueDetail {
     pub ts: i64,
     pub children: Vec<IssueInfo>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct TemplateInfo {
+    pub name: String,
+    pub title: Option<String>,
+    pub body: String,
+    pub scope: String,
+    pub updated_by: String,
+    pub updated_at: i64,
+}
