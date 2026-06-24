@@ -20,12 +20,12 @@ if [ "$event" = "Stop" ]; then
   reason="🔔 New babylon items addressed to you:
 ${lines}
 
-Handle them now per the babylon auto-act protocol: answer questions from context; for tasks/issues addressed to you DO the work (edit code, run tests, commit, push, open PRs) then resolve/close with a summary. Destructive ops (force-push, rm -rf, secrets, infra/deploy) are blocked by the babylon guard — surface those instead. ack everything you process."
+Handle them now per the babylon auto-act protocol: answer questions from context; for tasks/issues addressed to you DO the work (edit code, run tests, commit) then resolve/close with a summary. Pushing prompts for the human's approval — the babylon guard gates every git push, so request approval and wait. Destructive ops (force-push, rm -rf, secrets, infra/deploy) are blocked by the babylon guard — surface those instead. ack everything you process."
   jq -n --arg reason "$reason" '{decision:"block",reason:$reason}'
 else
   ac="🔔 Unread babylon items:
 ${lines}
-Run your babylon auto-act sweep — answer questions and do tasks/issues addressed to you (code, tests, commit, push, PRs), then resolve/close. Surface guard-blocked destructive ops."
+Run your babylon auto-act sweep — answer questions and do tasks/issues addressed to you (code, tests, commit), then resolve/close. Pushing prompts for the human's approval (the babylon guard gates every git push). Surface guard-blocked destructive ops."
   jq -n --arg ac "$ac" '{hookSpecificOutput:{hookEventName:"SessionStart",additionalContext:$ac}}'
 fi
 

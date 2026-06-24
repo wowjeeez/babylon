@@ -10,6 +10,8 @@ decision() {
   out=$(printf '%s' "$input" | bash "$GUARD")
   if printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; then
     printf 'deny'
+  elif printf '%s' "$out" | grep -q '"permissionDecision":"ask"'; then
+    printf 'ask'
   else
     printf 'allow'
   fi
@@ -53,8 +55,8 @@ bash_case deny  'aws s3 delete-bucket --bucket x'
 bash_case deny  'cat ~/.ssh/id_rsa'
 bash_case deny  'base64 secrets/key.pem'
 
-bash_case allow 'git push'
-bash_case allow 'git push origin feature'
+bash_case ask   'git push'
+bash_case ask   'git push origin feature'
 bash_case allow 'git commit -m "x"'
 bash_case allow 'rm build.log'
 bash_case allow 'rm -r node_modules'

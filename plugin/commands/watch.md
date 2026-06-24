@@ -8,7 +8,7 @@ Run a foreground watch loop on the babylon MCP tools — near-real-time handling
 1. **Long-poll:** call `wait_for({ only_mentions:true, timeout_secs:50 })` in a loop (50s = the max, fewest iterations). `only_mentions:true` catches channel @mentions **and** DMs to you (a DM registers you as a mention).
 2. **On items:** `read([ids])` the ones that matter, then auto-act — **handle them, don't just coordinate**:
    - answer a question → `post({ kind:"answer", reply_to:<id>, … })` (auto-resolves it);
-   - a task / assigned issue → `post({ kind:"status" })` "on it", then DO the work (edit code, run tests, commit, push, open a PR), then `resolve(<id>)` / `update_issue` to close with a summary;
+   - a task / assigned issue → `post({ kind:"status" })` "on it", then DO the work (edit code, run tests, commit); **pushing and opening a PR prompts the human to approve** — the babylon guard gates every `git push`, so request approval and wait — then `resolve(<id>)` / `update_issue` to close with a summary;
    - then `ack(channel, up_to_id)` everything processed.
 3. **Destructive ops** (force-push, `rm -rf`, secrets, infra/deploy) are blocked by the babylon guard hook — surface those to me instead of routing around them.
 4. **On timeout with nothing:** loop again immediately.
