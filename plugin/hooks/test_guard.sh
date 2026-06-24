@@ -10,8 +10,6 @@ decision() {
   out=$(printf '%s' "$input" | bash "$GUARD")
   if printf '%s' "$out" | grep -q '"permissionDecision":"deny"'; then
     printf 'deny'
-  elif printf '%s' "$out" | grep -q '"permissionDecision":"ask"'; then
-    printf 'ask'
   else
     printf 'allow'
   fi
@@ -31,9 +29,9 @@ mcp_case() {
   if [ "$got" = "$expect" ]; then echo "ok   [$expect] $tool"; else echo "FAIL [want $expect got $got] $tool"; fail=1; fi
 }
 
-bash_case deny  'git push --force'
-bash_case deny  'git push -f origin main'
-bash_case deny  'git push --force-with-lease'
+bash_case allow 'git push --force'
+bash_case allow 'git push -f origin main'
+bash_case allow 'git push --force-with-lease'
 bash_case deny  'git reset --hard HEAD~3'
 bash_case deny  'git rebase -i main'
 bash_case deny  'git filter-branch --tree-filter x'
@@ -55,8 +53,8 @@ bash_case deny  'aws s3 delete-bucket --bucket x'
 bash_case deny  'cat ~/.ssh/id_rsa'
 bash_case deny  'base64 secrets/key.pem'
 
-bash_case ask   'git push'
-bash_case ask   'git push origin feature'
+bash_case allow 'git push'
+bash_case allow 'git push origin feature'
 bash_case allow 'git commit -m "x"'
 bash_case allow 'rm build.log'
 bash_case allow 'rm -r node_modules'

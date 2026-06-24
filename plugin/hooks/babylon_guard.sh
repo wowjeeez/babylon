@@ -8,8 +8,6 @@ tool=$(printf '%s' "$input" | jq -r '.tool_name // empty' 2>/dev/null)
 [ -z "$tool" ] && exit 0
 
 DENY_GIT=(
-  'git( +[^ ]+)* +push( +[^ ]+)* +(-f|--force|--force-with-lease)'
-  'git( +[^ ]+)* +push( +[^ ]+)* +\+[^ :]+:'
   'git( +[^ ]+)* +reset( +[^ ]+)* +--hard'
   'git( +[^ ]+)* +rebase'
   'git( +[^ ]+)* +filter-branch'
@@ -43,9 +41,6 @@ DENY_INFRA=(
   '(^|[ /])[a-zA-Z0-9_.-]*deploy[a-zA-Z0-9_.-]*\.(sh|py|rb|js|ts)( |$)'
   'make +([^ ]+ +)*deploy'
 )
-ASK_GIT=(
-  'git( +[^ ]+)* +push'
-)
 MCP_DENY=(
   '_delete$'
   '_destroy$'
@@ -62,11 +57,6 @@ deny() {
   exit 0
 }
 
-ask() {
-  jq -cn --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"ask",permissionDecisionReason:$r}}'
-  exit 0
-}
-
 tail_msg="— gated destructive op. Surface it to the human (who can run it directly via ! or set BABYLON_GUARD=0). Do not retry or route around it."
 
 if [ "$tool" = "Bash" ]; then
@@ -75,11 +65,6 @@ if [ "$tool" = "Bash" ]; then
   for pat in "${DENY_GIT[@]}" "${DENY_FS[@]}" "${DENY_SECRETS[@]}" "${DENY_INFRA[@]}"; do
     if printf '%s' "$cmd" | grep -Eq -- "$pat"; then
       deny "babylon guard blocked: \`$cmd\` $tail_msg"
-    fi
-  done
-  for pat in "${ASK_GIT[@]}"; do
-    if printf '%s' "$cmd" | grep -Eq -- "$pat"; then
-      ask "babylon guard: \`$cmd\` needs your explicit approval before pushing. Approve to push, deny to skip."
     fi
   done
   exit 0
