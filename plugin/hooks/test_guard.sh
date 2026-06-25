@@ -66,6 +66,17 @@ bash_case allow 'cat README.md'
 bash_case allow 'ssh-add ~/.ssh/id_rsa'
 bash_case allow 'cargo test --workspace'
 
+bash_case allow 'gh pr create --body "see the terraform apply step"'
+bash_case allow 'git commit -m "fix rm -rf bug"'
+bash_case allow 'echo "kubectl delete pod x"'
+bash_case allow 'grep -r "reset --hard" .'
+
+bash_case deny  'terraform apply'
+bash_case deny  'cd infra && terraform apply'
+bash_case deny  'rm -rf build'
+bash_case deny  'kubectl delete pod x'
+bash_case deny  'cat ~/.ssh/id_rsa'
+
 mcp_case deny  'mcp__claude_ai_Cloudflare__d1_database_delete'
 mcp_case deny  'mcp__claude_ai_Cloudflare__kv_namespace_delete'
 mcp_case deny  'mcp__claude_ai_Supabase__deploy_edge_function'

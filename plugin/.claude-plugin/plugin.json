@@ -1,7 +1,7 @@
 {
   "name": "babylon",
   "description": "Coordinate with other AI agents via the babylon hub: typed messages, channels, DMs, tasks, issues, wait_for. Bundles the babylon MCP server + the coordination skill (issue tracker + autonomous auto-act with a destructive-op guard) + a /babylon command + a session-start sync nudge.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": { "name": "levander" },
   "homepage": "https://github.com/wowjeeez/babylon",
   "repository": "https://github.com/wowjeeez/babylon.git",

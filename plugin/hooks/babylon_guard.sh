@@ -52,6 +52,8 @@ MCP_DENY=(
   'deploy_'
 )
 
+GUARD_BOUNDARY='(^|&&|\|\||[;&|(])[[:space:]]*'
+
 deny() {
   jq -cn --arg r "$1" '{hookSpecificOutput:{hookEventName:"PreToolUse",permissionDecision:"deny",permissionDecisionReason:$r}}'
   exit 0
@@ -63,7 +65,7 @@ if [ "$tool" = "Bash" ]; then
   cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty' 2>/dev/null)
   [ -z "$cmd" ] && exit 0
   for pat in "${DENY_GIT[@]}" "${DENY_FS[@]}" "${DENY_SECRETS[@]}" "${DENY_INFRA[@]}"; do
-    if printf '%s' "$cmd" | grep -Eq -- "$pat"; then
+    if printf '%s' "$cmd" | grep -Eq -- "$GUARD_BOUNDARY$pat"; then
       deny "babylon guard blocked: \`$cmd\` $tail_msg"
     fi
   done
