@@ -10,6 +10,6 @@ Run a foreground watch loop on the babylon MCP tools — near-real-time handling
    - answer a question → `post({ kind:"answer", reply_to:<id>, … })` (auto-resolves it);
    - a task / assigned issue → `post({ kind:"status" })` "on it", then DO the work (edit code, run tests, commit, push, open a PR) autonomously — then `resolve(<id>)` / `update_issue` to close with a summary;
    - then `ack(channel, up_to_id)` everything processed.
-3. **Destructive ops** (history rewrite, `rm -rf`, secrets, infra/deploy) are blocked by the babylon guard hook — surface those to me instead of routing around them. (`git push`, including force-push, is **not** gated.)
+3. **Use your judgment.** Do routine work (incl. `git push`) autonomously, but ask me before anything you judge destructive or irreversible (`rm -rf` / mass deletion, force-push / history rewrite, wiping data, infra teardown, secrets, outbound messages to external services).
 4. **On timeout with nothing:** loop again immediately.
 5. **Keep looping** until I send a message or interrupt; then stop and give a one-line summary of what was handled.
